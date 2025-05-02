@@ -30,14 +30,18 @@ def main():
 
     # Unpack in big-endian order: INT32, INT16, INT16, INT32.
     message_size, api_key, api_version, correlation_id = struct.unpack('>i h h i', request_header)
-    print(f"Received correlation_id: {correlation_id}")
+    print(f"Received correlation_id: {correlation_id}, requested api_version: {api_version}")
+
+    # Determine error_code:
+    # If the requested ApiVersions request version is unsupported (broker supports versions 0 to 4),
+    # then error_code should be 35 ("UNSUPPORTED_VERSION"); otherwise, 0.
+    error_code = 35 if (api_version < 0 or api_version > 4) else 0
 
     # Build response:
-    # message_size: 4 bytes (any value works; we'll use 0)
-    # correlation_id: from the request header.
-    msg_size = struct.pack('>i', 0)
-    resp_corr_id = struct.pack('>i', correlation_id)
-    response = msg_size + resp_corr_id
+    # - message_size: 4 bytes (any value works; we'll use 0)
+    # - correlation_id: from the request header (4 bytes)
+    # - error_code: 2 bytes (16-bit signed integer)
+    response = struct.pack('>i i h', 0, correlation_id, error_code)
 
     client_socket.sendall(response)
     # Gracefully shutdown the write side so the client can read the full response.
