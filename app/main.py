@@ -178,7 +178,10 @@ def run_server():
 
 def run():
     """
-    Main entry point.
+    Main entry point for the script.
+    Sets up the server and starts listening for incoming connections.
+    Prints logs to the console for each request and response.
+    Handles any exceptions that occur during processing.
     """
     print("Logs from your program will appear here!")
     try:
