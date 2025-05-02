@@ -47,14 +47,17 @@ def main():
         #  - error_code: 2 bytes (int16), here 0
         #  - Array length: 4 bytes (int32), here 1
         #  - One ApiVersion entry (6 bytes):
-        #       api_key: 2 bytes (int16) - 18 for ApiVersions.
-        #       min_version: 2 bytes (int16) - 0.
-        #       max_version: 2 bytes (int16) - 4.
-        fixed_body = struct.pack('>h i h h', 0, 1, 18, 0) + struct.pack('>h', 4)
-        # Append TAG_BUFFER (flexible version): no tagged fields encoded as a single zero byte.
-        tag_buffer = b'\x00'
+        #       api_key: 2 bytes (int16) - 18 for ApiVersions
+        #       min_version: 2 bytes (int16) - 0
+        #       max_version: 2 bytes (int16) - 4
+        fixed_body = struct.pack('>h i h h h', 0, 1, 18, 0, 4)
+        
+        # Append TAG_BUFFER for flexible version (v4):
+        # For empty tagged fields, encode as array length 0
+        tag_buffer = struct.pack('>B', 0)  # Single byte with value 0
         body = fixed_body + tag_buffer
-        # Total bytes after message_size: 4 (correlation_id) + 12 + 1 = 17.
+        
+        # Total bytes after message_size = 4 (correlation_id) + len(body)
         total_bytes = 4 + len(body)
         response = struct.pack('>i i', total_bytes, correlation_id) + body
 
