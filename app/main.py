@@ -133,7 +133,7 @@ def run_server():
     ApiVersions (v4) requests from the same client.
     
     For each request:
-      - Reads a fixed header (12 bytes)
+      - Reads a fixed header (12 bytes: 4 byte length field and 8 bytes header prefix)
       - Discards any extra request data (if present)
       - Sends an ApiVersions response based on the api_version and correlation_id.
     
@@ -155,9 +155,10 @@ def run_server():
             print(f"Received api_key: {api_key}, api_version: {api_version}, correlation_id: {correlation_id}")
             print(f"Received request size: {request_size}")
             
-            # Discard any extra request bytes.
-            header_size = 4 + 2 + 2 + 4  # 12 bytes have been read.
-            discard_remaining_request(client_socket, request_size, 12)
+            # NOTE: The request_size field does not include the initial 4-byte length field.
+            # We've already read 8 bytes (the header prefix) after the length field.
+            # Therefore, the extra (body) bytes to discard = request_size - 8.
+            discard_remaining_request(client_socket, request_size, 8)
             
             if api_key == 18:
                 response = build_api_versions_response(api_key, api_version, correlation_id)
