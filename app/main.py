@@ -24,8 +24,8 @@ def main():
 
 if __name__ == "__main__":
     main()
-``` 
 
-In this implementation, when a client connects and sends a request, the server responds with an eight-byte message:
-- Four bytes for the message size (here set to 0 for simplicity)
-- Four bytes for the correlation ID (7)
+
+#In this implementation, when a client connects and sends a request, the server responds with an eight-byte message:
+#- Four bytes for the message size (here set to 0 for simplicity)
+#- Four bytes for the correlation ID (7)
