@@ -42,20 +42,23 @@ def main():
         total_bytes = 4 + len(body)  # 4 bytes for correlation_id + body
         response = struct.pack('>i i', total_bytes, correlation_id) + body
     else:
-        # Build response body for a valid "ApiVersions" (v4) request.
-        # Fixed layout (12 bytes):
-        #  - error_code: 2 bytes (int16), here 0
-        #  - Array length: 4 bytes (int32), here 1
-        #  - One ApiVersion entry (6 bytes):
-        #       api_key: 2 bytes (int16) - 18 for ApiVersions
-        #       min_version: 2 bytes (int16) - 0
-        #       max_version: 2 bytes (int16) - 4
-        fixed_body = struct.pack('>h i h h h', 0, 1, 18, 0, 4)
-        
-        # Append TAG_BUFFER for flexible version (v4):
-        # For empty tagged fields, encode as array length 0
-        tag_buffer = struct.pack('>B', 0)  # Single byte with value 0
-        body = fixed_body + tag_buffer
+        # Build response body for a valid "ApiVersions" (v4) request:
+        # - error_code: INT16 (2 bytes)
+        # - api_keys array:
+        #     - length: INT32 (4 bytes)
+        #     - entries: array of:
+        #         - api_key: INT16 (2 bytes)
+        #         - min_version: INT16 (2 bytes)
+        #         - max_version: INT16 (2 bytes)
+        # - throttle_time_ms: INT32 (4 bytes) [v1+]
+        # - tagged_fields: COMPACT_BYTES [v3+]
+        body = (
+            struct.pack('>h', 0) +                # error_code = 0
+            struct.pack('>i', 1) +                # api_keys array length = 1
+            struct.pack('>h h h', 18, 0, 4) +     # one ApiVersion entry
+            struct.pack('>i', 0) +                # throttle_time_ms = 0
+            b'\x00'                               # tagged_fields (empty)
+        )
         
         # Total bytes after message_size = 4 (correlation_id) + len(body)
         total_bytes = 4 + len(body)
