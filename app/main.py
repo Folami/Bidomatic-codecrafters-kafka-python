@@ -37,14 +37,37 @@ def main():
     # then error_code should be 35 ("UNSUPPORTED_VERSION"); otherwise, 0.
     error_code = 35 if (api_version < 0 or api_version > 4) else 0
 
-    # Build response:
-    # - message_size: 4 bytes (any value works; we'll use 0)
-    # - correlation_id: from the request header (4 bytes)
-    # - error_code: 2 bytes (16-bit signed integer)
-    response = struct.pack('>i i h', 0, correlation_id, error_code)
+    # For a valid "ApiVersions" request (error_code == 0), we build a response body with one entry.
+    # Layout of response body:
+    # - error_code: 2 bytes (int16)
+    # - Array length: 4 bytes (int32); here we use 1
+    # - One ApiVersion entry (6 bytes):
+    #      api_key: 2 bytes (int16) - use 18 for ApiVersions.
+    #      min_version: 2 bytes (int16) - for example, 0.
+    #      max_version: 2 bytes (int16) - must be at least 4.
+    #
+    # Total body length = 2 + 4 + 6 = 12 bytes.
+    # The response header is 4 bytes (correlation_id), so total bytes after message_size = 16.
+    # That means the first 4 bytes (message_size field) must contain 16.
+    
+    if error_code != 0:
+        # In case of error (unsupported version) we send a minimal response body: error_code only.
+        body = struct.pack('>h', error_code)
+        # The header still includes the correlation_id.
+        total_bytes = 4 + len(body)  # 4 bytes for correlation_id + body
+        response = struct.pack('>i i', total_bytes, correlation_id) + body
+    else:
+        # Build response body.
+        api_versions_count = 1
+        api_key_entry = 18   # ApiVersions API key.
+        min_version = 0
+        max_version = 4
+        body = struct.pack('>h i h h', 0, api_versions_count, api_key_entry, min_version) + struct.pack('>h', max_version)
+        total_bytes = 4 + len(body)  # 4 bytes correlation_id + 12 bytes body = 16
+        response = struct.pack('>i i', total_bytes, correlation_id) + body
 
     client_socket.sendall(response)
-    # Gracefully shutdown the write side so the client can read the full response.
+    # Gracefully shutdown the write side so the client can read the complete response.
     client_socket.shutdown(socket.SHUT_WR)
     
     client_socket.close()
