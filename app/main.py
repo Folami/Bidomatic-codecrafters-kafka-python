@@ -118,7 +118,7 @@ def main():
                 struct.pack('>i', 1) +                # api_keys array length = 1 (INT32 for COMPACT_ARRAY_LEGACY)
                 struct.pack('>h h h', 18, 0, 4) +     # one ApiVersion entry (ApiKey=18, Min=0, Max=4)
                 struct.pack('>i', 0) +                # throttle_time_ms = 0
-                b'\x00'                               # tagged_fields (NumTaggedFields=0 encoded as UNSIGNED_VARINT)
+                b'\x00\x00'                          # tagged_fields (NumTaggedFields=0 encoded as UNSIGNED_VARINT + 1 byte padding)
             )
 
         # Response Header v1 (since Request Header was v2):
