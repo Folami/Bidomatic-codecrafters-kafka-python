@@ -30,19 +30,21 @@ import struct
 import threading
 
 
+# --- Encoding/Decoding Helpers ---
+
 def encode_big_endian(fmt, n):
     """
-    Encodes a number 'n' using the given format string 'fmt'
-    in big-endian order.
+    Encodes number 'n' using format 'fmt' in big-endian.
+    The format 'fmt' is a string that specifies the data type.
     """
-    return struct.pack(fmt, n)
+    return struct.pack(f'>{fmt}', n)
 
 def decode_big_endian(fmt, data):
     """
-    Decodes data using the given format string 'fmt'
-    in big-endian order.
+    Decodes data using format 'fmt' in big-endian.
+    The data must be a bytes object of the correct size.
     """
-    return struct.unpack(fmt, data)
+    return struct.unpack(f'>{fmt}', data)
 
 def encode_string(s):
     """
@@ -51,9 +53,33 @@ def encode_string(s):
       - If s is None, encodes as int16 -1.
     """
     if s is None:
-        return encode_big_endian('>h', -1)
+        return encode_big_endian('h', -1)
     encoded = s.encode('utf-8')
-    return encode_big_endian('>h', len(encoded)) + encoded
+    return encode_big_endian('h', len(encoded)) + encoded
+
+def decode_string(data, offset):
+    """
+    Decodes a Kafka v0 string from data starting at offset.
+    Returns the decoded string and the new offset.
+    """
+    length = decode_big_endian('h', data[offset:offset+2])[0]
+    if length == -1:
+        return None, offset + 2
+    start = offset + 2
+    end = start + length
+    return data[start:end].decode('utf-8'), end
+
+def read_string(sock):
+    """
+    Reads a Kafka v0 string from the socket.
+    Returns the decoded string and the number of bytes read.
+    """
+    len_bytes = read_n_bytes(sock, 2)
+    length = decode_big_endian('h', len_bytes)[0]
+    if length == -1:
+        return None, 2 # Return None and bytes read (2 for length)
+    string_bytes = read_n_bytes(sock, length)
+    return string_bytes.decode('utf-8'), 2 + length # Return string and total bytes read
 
 def encode_fixed_string(s, length):
     """
@@ -62,41 +88,10 @@ def encode_fixed_string(s, length):
     encoded = s.encode('utf-8')
     if len(encoded) > length:
         encoded = encoded[:length]
-    return encoded.ljust(length, b'\x00')
+    # Pad with null bytes on the right
+    return encoded + b'\x00' * (length - len(encoded))
 
-def parse_describe_topic_partitions_request(sock, remaining):
-    # For v0, assume the request body begins with the topic string.
-    topic_len_bytes = read_n_bytes(sock, 2)
-    topic_len = decode_big_endian('>h', topic_len_bytes)[0]
-    topic_bytes = read_n_bytes(sock, topic_len)
-    # Discard any extra bytes (if any) from the request body.
-    bytes_read = 2 + topic_len
-    if remaining > bytes_read:
-        discard_remaining_request(sock, remaining, bytes_read)
-    return topic_bytes.decode('utf-8')
-
-def build_describe_topic_partitions_response(correlation_id, topic):
-    """
-    Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
-    The response body is:
-      - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
-      - topic_name: length-prefixed string (2-byte length + UTF-8 bytes)
-      - topic_id: 16 bytes of zero
-      - partitions: int32 (4 bytes, count = 0 indicating an empty array)
-    The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
-    """
-    error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
-    # Encode topic as a length-prefixed string
-    topic_field = encode_string(topic)
-    topic_id = b'\x00' * 16
-    partitions = encode_big_endian('>i', 0)  # empty partitions array (count = 0)
-    
-    body = encode_big_endian('>h', error_code) + topic_field + topic_id + partitions
-    msg_size = 4 + len(body)  # 4 bytes for correlation_id + body length
-    response = encode_big_endian('>i', msg_size)
-    response += encode_big_endian('>i', correlation_id)
-    response += body
-    return response
+# --- Socket Reading Helpers ---
 
 def read_n_bytes(sock, n):
     """
@@ -107,10 +102,23 @@ def read_n_bytes(sock, n):
     while len(data) < n:
         chunk = sock.recv(n - len(data))
         if not chunk:
-            raise IOError("Expected {} bytes, got {} bytes".format(n, len(data)))
+            # Connection closed prematurely
+            raise IOError(f"Connection closed while trying to read {n} bytes. Got {len(data)} bytes.")
         data += chunk
     return data
 
+def discard_remaining_bytes(sock, remaining):
+    """
+    Discards the remaining bytes in a request.
+    """
+    while remaining > 0:
+        chunk_size = min(remaining, 4096)
+        chunk = sock.recv(chunk_size)
+        if not chunk:
+            raise IOError(f"Connection closed while discarding {remaining} bytes.")
+        remaining -= len(chunk)
+
+# --- Request Header Parsing ---
 
 def read_request_header(sock):
     """
@@ -124,32 +132,43 @@ def read_request_header(sock):
       (api_key, api_version, correlation_id, remaining_size)
     where remaining_size = request_size - 8.
     """
-    # Read 4-byte size field.
-    request_size_bytes = read_n_bytes(sock, 4)
-    request_size = decode_big_endian('>i', request_size_bytes)[0]
-    
-    # Read remaining 8 bytes: api_key, api_version, correlation_id.
-    header_bytes = read_n_bytes(sock, 8)
-    # Use '>hhi' to decode correlation_id as a signed int.
-    api_key, api_version, correlation_id = decode_big_endian('>hhi', header_bytes)
-    
-    remaining_size = request_size - 8
-    return api_key, api_version, correlation_id, remaining_size
+    # 1. Read Message Size (4 bytes)
+    size_bytes = read_n_bytes(sock, 4)
+    request_total_size = decode_big_endian('i', size_bytes)[0]
 
+    # 2. Read ApiKey, ApiVersion, CorrelationId (2 + 2 + 4 = 8 bytes)
+    api_corr_bytes = read_n_bytes(sock, 8)
+    api_key, api_version, correlation_id = decode_big_endian('h h i', api_corr_bytes)
 
-def discard_remaining_request(sock, total_bytes, bytes_read):
+    # 3. Read ClientId (v0 String: INT16 length + bytes)
+    client_id, client_id_bytes_read = read_string(sock)
+
+    # Calculate remaining size for the actual request *body*
+    header_size = 8 + client_id_bytes_read # ApiKey/Ver/Corr + ClientId
+    request_body_size = request_total_size - header_size
+
+    return api_key, api_version, correlation_id, client_id, request_body_size
+
+# --- API Specific Request Parsing ---
+
+def parse_describe_topic_partitions_request(sock, body_size):
     """
-    Discards the remaining bytes in a request.
+    Parses the body of a DescribeTopicPartitions v0 request.
+    Body: TopicName (STRING v0)
+    Returns: topic_name (string)
     """
-    remaining = total_bytes - bytes_read
-    while remaining > 0:
-        chunk = sock.recv(min(remaining, 4096))
-        if not chunk:
-            break
-        remaining -= len(chunk)
+    # Read the topic name (v0 string)
+    topic_name, topic_bytes_read = read_string(sock)
 
+    # Discard any remaining bytes in the body (shouldn't be any for v0, but good practice)
+    if body_size > topic_bytes_read:
+        discard_remaining_bytes(sock, body_size - topic_bytes_read)
 
-def build_api_versions_response(api_key, api_version, correlation_id):
+    return topic_name
+
+# --- API Specific Response Building ---
+
+def build_api_versions_response(correlation_id, api_version_requested):
     """
     Constructs the ApiVersions response.
     For api_key 18:
@@ -169,90 +188,144 @@ def build_api_versions_response(api_key, api_version, correlation_id):
       The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
     For an error response, the body layout remains unchanged.
     """
-    error_code = 35 if (api_version < 0 or api_version > 4) else 0
+    supported_api_versions_key = 18
+    supported_api_versions_min = 0
+    supported_api_versions_max = 4
 
+    supported_describe_topic_key = 75
+    supported_describe_topic_min = 0
+    supported_describe_topic_max = 0 # Only v0 supported
+
+    error_code = 0
+    # Check if the *requested* version for ApiVersions itself is supported
+    if api_version_requested < supported_api_versions_min or api_version_requested > supported_api_versions_max:
+        error_code = 35 # UNSUPPORTED_VERSION
+
+    body = b""
     if error_code != 0:
-        # Error body: 2 + 1 + 4 + 1 = 8 bytes.
-        body = encode_big_endian('>h', error_code)
-        body += encode_big_endian('>B', 0)       # compact array length = 0
-        body += encode_big_endian('>i', 0)       # throttle_time_ms = 0
-        body += b'\x00'                        # TAG_BUFFER
+        # Error response body (flexible format)
+        body += encode_big_endian('h', error_code) # Error Code
+        body += b'\x01' # Compact Array Length: 0 elements (encoded as 0+1)
+        body += encode_big_endian('i', 0) # Throttle Time MS
+        body += b'\x00' # Tagged Fields (0 tags)
     else:
-        # Successful body:
-        # error_code (2 bytes)
-        # compact array length (1 byte) = 3 (i.e. 2 elements + 1)
-        # Entry 1: ApiVersions (api_key 18) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
-        # Entry 2: DescribeTopicPartitions (api_key 75) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
-        # throttle_time_ms (4 bytes)
-        # overall TAG_BUFFER (1 byte)
-        # Total = 2 + 1 + 7 + 7 + 4 + 1 = 22 bytes
-        body = encode_big_endian('>h', error_code)
-        body += encode_big_endian('>B', 3)       # compact array length = 3 (2 entries + 1)
-        
-        # Entry for ApiVersions (api_key 18)
-        entry1 = encode_big_endian('>h', 18)       # api_key = 18
-        entry1 += encode_big_endian('>h', 0)         # min_version = 0
-        entry1 += encode_big_endian('>h', 4)         # max_version = 4
-        entry1 += b'\x00'                          # TAG_BUFFER
-        
-        # Entry for DescribeTopicPartitions (api_key 75)
-        entry2 = encode_big_endian('>h', 75)       # api_key = 75
-        entry2 += encode_big_endian('>h', 0)         # min_version = 0
-        entry2 += encode_big_endian('>h', 0)         # max_version = 0
-        entry2 += b'\x00'                          # TAG_BUFFER
-        
-        body += entry1 + entry2
-        body += encode_big_endian('>i', 0)         # throttle_time_ms = 0
-        body += b'\x00'                          # overall TAG_BUFFER
+        # Success response body (flexible format)
+        body += encode_big_endian('h', error_code) # Error Code (0)
+        # Compact Array for ApiKeys: Length = 2 elements (encoded as 2+1 = 3)
+        body += b'\x03'
 
-    # Total payload after message_length field: correlation_id (4 bytes) + body.
-    msg_size = 4 + len(body)
-    response = encode_big_endian('>i', msg_size)             # message_length field
-    response += encode_big_endian('>i', correlation_id)        # correlation_id
-    response += body
+        # Entry 1: ApiVersions (Key 18)
+        body += encode_big_endian('h', supported_api_versions_key)
+        body += encode_big_endian('h', supported_api_versions_min)
+        body += encode_big_endian('h', supported_api_versions_max)
+        body += b'\x00' # Tagged Fields for this entry (0 tags)
+
+        # Entry 2: DescribeTopicPartitions (Key 75)
+        body += encode_big_endian('h', supported_describe_topic_key)
+        body += encode_big_endian('h', supported_describe_topic_min)
+        body += encode_big_endian('h', supported_describe_topic_max)
+        body += b'\x00' # Tagged Fields for this entry (0 tags)
+
+        body += encode_big_endian('i', 0) # Throttle Time MS
+        body += b'\x00' # Tagged Fields for the response (0 tags)
+
+    # Response Header v1 (Correlation ID + Tagged Fields)
+    header = encode_big_endian('i', correlation_id)
+    header += b'\x00' # Tagged Fields for header (0 tags)
+
+    # Full Response: Size + Header + Body
+    message_size = len(header) + len(body)
+    response = encode_big_endian('i', message_size) + header + body
     return response
 
+def build_describe_topic_partitions_response(correlation_id, topic_name, error_code):
+    """
+    Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
+    The response body is:
+      - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
+      - topic_name: fixed-length string (96 bytes, UTF-8 encoded, padded with zeros)
+      - topic_id: 16 bytes of zero
+      - partitions: int32 (4 bytes, count = 0 indicating an empty array)
+    The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
+    """
+    error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
+
+    body = b""
+    body += encode_big_endian('h', error_code)
+    body += encode_fixed_string(topic_name, 96) # Pad/truncate requested name
+    body += b'\x00' * 16 # Zeroed Topic ID
+    body += encode_big_endian('i', 0) # Partition count = 0
+
+    # Response Header (Correlation ID only)
+    header = encode_big_endian('i', correlation_id)
+
+    # Full Response: Size + Header + Body
+    message_size = len(header) + len(body)
+    response = encode_big_endian('i', message_size) + header + body
+    return response
+
+# --- Client Handling Logic ---
 
 def handle_client(client_socket):
     """
     Processes multiple sequential requests from a single client.
     Reads each request header, discards any extra request data, and sends back a response.
     """
+    client_addr = client_socket.getpeername()
+    print(f"Connection from {client_addr} established!")
     try:
         while True:
-            try:
-                api_key, api_version, correlation_id, remaining_size = read_request_header(client_socket)
-                print(f"Received api_key: {api_key}, api_version: {api_version}, correlation_id: {correlation_id}")
-                
-                # Discard any extra request bytes.
-                if api_key == 18:
-                    if remaining_size > 0:
-                        discard_remaining_request(client_socket, remaining_size, 0)
-                    response = build_api_versions_response(api_key, api_version, correlation_id)
-                    client_socket.sendall(response)
-                    print(f"Sent ApiVersions response ({len(response)} bytes)")
-                elif api_key == 75:
-                    # DescribeTopicPartitions request (v0)
-                    topic = parse_describe_topic_partitions_request(client_socket, remaining_size)
-                    response = build_describe_topic_partitions_response(correlation_id, topic)
-                    client_socket.sendall(response)
-                    print(f"Sent DescribeTopicPartitions response ({len(response)} bytes)")
+            # Read the common request header fields
+            api_key, api_version, correlation_id, client_id, request_body_size = read_request_header_v0(client_socket)
+            print(f"[{client_addr}] Received Request: ApiKey={api_key}, ApiVersion={api_version}, CorrelationId={correlation_id}, ClientId='{client_id}', BodySize={request_body_size}")
+
+            response = None
+            if api_key == 18: # ApiVersions
+                # ApiVersions request body is usually empty or has tagged fields we ignore for now
+                if request_body_size > 0:
+                    print(f"[{client_addr}] Discarding {request_body_size} bytes from ApiVersions request body.")
+                    discard_remaining_bytes(client_socket, request_body_size)
+                response = build_api_versions_response(correlation_id, api_version)
+                print(f"[{client_addr}] Sending ApiVersions response ({len(response)} bytes)")
+
+            elif api_key == 75: # DescribeTopicPartitions
+                if api_version == 0:
+                    topic_name = parse_describe_topic_partitions_request_v0(client_socket, request_body_size)
+                    print(f"[{client_addr}] Parsed DescribeTopicPartitions v0 request for topic: '{topic_name}'")
+                    # For now, always respond with UNKNOWN_TOPIC
+                    response = build_describe_topic_partitions_response_v0_unknown(correlation_id, topic_name)
+                    print(f"[{client_addr}] Sending DescribeTopicPartitions v0 (Unknown Topic) response ({len(response)} bytes)")
                 else:
-                    print(f"Unknown api_key: {api_key}, no response sent")
-            except IOError:
-                # Likely client disconnected.
-                break
-            except Exception as e:
-                print(f"Error processing request: {e}")
-                break
+                    print(f"[{client_addr}] Unsupported DescribeTopicPartitions version: {api_version}. Discarding body.")
+                    if request_body_size > 0:
+                        discard_remaining_bytes(client_socket, request_body_size)
+                    # Ideally, send an UNSUPPORTED_VERSION error response matching the requested version's schema
+                    # For simplicity now, we just won't respond.
+
+            else:
+                print(f"[{client_addr}] Unsupported ApiKey: {api_key}. Discarding body.")
+                if request_body_size > 0:
+                    discard_remaining_bytes(client_socket, request_body_size)
+                # No response for unknown keys for now
+
+            if response:
+                client_socket.sendall(response)
+
+    except IOError as e:
+        print(f"[{client_addr}] I/O Error: {e}. Closing connection.")
+    except Exception as e:
+        print(f"[{client_addr}] Unexpected error: {e}. Closing connection.")
     finally:
         try:
+            # Attempt graceful shutdown
             client_socket.shutdown(socket.SHUT_WR)
-        except Exception:
-            pass
-        client_socket.close()
-        print("Client connection closed.")
+        except OSError:
+            pass # Ignore error if socket already closed
+        finally:
+            client_socket.close()
+            print(f"[{client_addr}] Connection closed.")
 
+# --- Server Logic ---
 
 def run_server(port):
     """
@@ -260,19 +333,22 @@ def run_server(port):
     Accepts new client connections concurrently, and delegates request processing to handle_client().
     """
     server = socket.create_server(("localhost", port), reuse_port=True)
-    print("Server listening on port", port)
-    
+    print(f"Server listening on port {port}")
     try:
         while True:
             client_socket, client_address = server.accept()
             print(f"Connection from {client_address} has been established!")
             # Spawn a thread for each client.
-            thread = threading.Thread(target=handle_client, args=(client_socket,))
+            thread = threading.Thread(target=handle_client, args=(client_socket,), daemon=True)
             thread.start()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
     finally:
         server.close()
         print("Server closed.")
 
+
+# --- Main Execution ---
 
 def run():
     """
@@ -285,7 +361,7 @@ def run():
     try:
         run_server(port)
     except Exception as e:
-        print("Error:", e)
+        print(f"Server failed to start or run: {e}")
 
 
 if __name__ == "__main__":
