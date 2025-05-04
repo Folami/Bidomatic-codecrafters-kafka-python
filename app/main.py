@@ -101,45 +101,61 @@ def build_api_versions_response(api_key, api_version, correlation_id):
     Constructs the ApiVersions response.
     For api_key 18:
       - If api_version is not between 0 and 4, error_code 35 is used.
-      - Otherwise, error_code is 0 and the response includes one entry 
-        for ApiVersions (api_key 18, min_version 0, max_version 4).
+      - Otherwise, error_code is 0 and the response includes:
+            • an entry for ApiVersions (api_key 18, min_version 0, max_version 4)
+            • an entry for DescribeTopicPartitions (api_key 75, min_version 0, max_version 0)
+    Response format for a successful response:
+      - error_code: INT16 (2 bytes)
+      - api_keys (compact array): 1 byte (for two elements, value = 3)
+      - Entry 1 (7 bytes): api_key (INT16), min_version (INT16), max_version (INT16), TAG_BUFFER (1 byte, 0x00)
+      - Entry 2 (7 bytes): api_key (INT16), min_version (INT16), max_version (INT16), TAG_BUFFER (1 byte, 0x00)
+      - throttle_time_ms: INT32 (4 bytes, value 0)
+      - overall TAG_BUFFER: 1 byte (0x00)
       
-    The response format:
-      - Body:
-          error_code: INT16 (2 bytes)
-          api_keys (compact array): 1 byte (should be 2 for one element + 1)
-          For success: one ApiVersion entry:
-              api_key (INT16), min_version (INT16), max_version (INT16), TAG_BUFFER (1 byte, 0x00)
-          throttle_time_ms: INT32 (4 bytes, 0)
-          overall TAG_BUFFER: 1 byte (0x00)
-      - Total successful body size: 15 bytes.
-      - Full response: message_length (4 bytes) + correlation_id (4 bytes) + body.
+      Total successful body size = 2 + 1 + 7 + 7 + 4 + 1 = 22 bytes.
+      The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
+    For an error response, the body layout remains unchanged.
     """
     error_code = 35 if (api_version < 0 or api_version > 4) else 0
 
     if error_code != 0:
         # Error body: 2 + 1 + 4 + 1 = 8 bytes.
         body = encode_big_endian('>h', error_code)
-        body += encode_big_endian('>B', 0)  # compact array length = 0
-        body += encode_big_endian('>i', 0)  # throttle_time_ms = 0
-        body += b'\x00'                   # TAG_BUFFER
+        body += encode_big_endian('>B', 0)       # compact array length = 0
+        body += encode_big_endian('>i', 0)       # throttle_time_ms = 0
+        body += b'\x00'                        # TAG_BUFFER
     else:
-        # Successful body: 2 + 1 + (2+2+2+1) + 4 + 1 = 15 bytes.
+        # Successful body:
+        # error_code (2 bytes)
+        # compact array length (1 byte) = 3 (i.e. 2 elements + 1)
+        # Entry 1: 2 (api_key) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
+        # Entry 2: same as above, 7 bytes
+        # throttle_time_ms (4 bytes)
+        # overall TAG_BUFFER (1 byte)
+        # Total = 2 + 1 + 7 + 7 + 4 + 1 = 22 bytes
         body = encode_big_endian('>h', error_code)
-        # Fix: set compact array length to 2 (1 element + 1)
-        body += encode_big_endian('>B', 2)
-        entry = encode_big_endian('>h', 18) # api_key = 18
-        entry += encode_big_endian('>h', 0)  # min_version = 0
-        entry += encode_big_endian('>h', 4)  # max_version = 4
-        entry += b'\x00'                   # entry TAG_BUFFER
-        body += entry
-        body += encode_big_endian('>i', 0)   # throttle_time_ms = 0
-        body += b'\x00'                    # overall TAG_BUFFER
+        body += encode_big_endian('>B', 3)       # compact array length = 3 (2 entries + 1)
+        
+        # Entry for ApiVersions (api_key 18)
+        entry1 = encode_big_endian('>h', 18)       # api_key = 18
+        entry1 += encode_big_endian('>h', 0)         # min_version = 0
+        entry1 += encode_big_endian('>h', 4)         # max_version = 4
+        entry1 += b'\x00'                          # TAG_BUFFER
+        
+        # Entry for DescribeTopicPartitions (api_key 75)
+        entry2 = encode_big_endian('>h', 75)       # api_key = 75
+        entry2 += encode_big_endian('>h', 0)         # min_version = 0
+        entry2 += encode_big_endian('>h', 0)         # max_version = 0
+        entry2 += b'\x00'                          # TAG_BUFFER
+        
+        body += entry1 + entry2
+        body += encode_big_endian('>i', 0)         # throttle_time_ms = 0
+        body += b'\x00'                          # overall TAG_BUFFER
 
-    # Total payload after message length field is: correlation_id (4 bytes) + body.
+    # Total payload after message_length field: correlation_id (4 bytes) + body.
     msg_size = 4 + len(body)
-    response = encode_big_endian('>i', msg_size)        # message_length
-    response += encode_big_endian('>i', correlation_id)   # correlation_id
+    response = encode_big_endian('>i', msg_size)             # message_length field
+    response += encode_big_endian('>i', correlation_id)        # correlation_id
     response += body
     return response
 
