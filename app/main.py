@@ -276,7 +276,7 @@ def handle_client(client_socket):
     try:
         while True:
             # Read the common request header fields
-            api_key, api_version, correlation_id, client_id, request_body_size = read_request_header_v0(client_socket)
+            api_key, api_version, correlation_id, client_id, request_body_size = read_request_header(client_socket)
             print(f"[{client_addr}] Received Request: ApiKey={api_key}, ApiVersion={api_version}, CorrelationId={correlation_id}, ClientId='{client_id}', BodySize={request_body_size}")
 
             response = None
@@ -290,10 +290,10 @@ def handle_client(client_socket):
 
             elif api_key == 75: # DescribeTopicPartitions
                 if api_version == 0:
-                    topic_name = parse_describe_topic_partitions_request_v0(client_socket, request_body_size)
+                    topic_name = parse_describe_topic_partitions_request(client_socket, request_body_size)
                     print(f"[{client_addr}] Parsed DescribeTopicPartitions v0 request for topic: '{topic_name}'")
                     # For now, always respond with UNKNOWN_TOPIC
-                    response = build_describe_topic_partitions_response_v0_unknown(correlation_id, topic_name)
+                    response = build_describe_topic_partitions_response(correlation_id, topic_name)
                     print(f"[{client_addr}] Sending DescribeTopicPartitions v0 (Unknown Topic) response ({len(response)} bytes)")
                 else:
                     print(f"[{client_addr}] Unsupported DescribeTopicPartitions version: {api_version}. Discarding body.")
