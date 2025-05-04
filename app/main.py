@@ -44,6 +44,63 @@ def decode_big_endian(fmt, data):
     """
     return struct.unpack(fmt, data)
 
+def encode_string(s):
+    """
+    Encodes a string in Kafka v0 format:
+      - 2 bytes for length followed by UTF-8 encoded bytes.
+      - If s is None, encodes as int16 -1.
+    """
+    if s is None:
+        return encode_big_endian('>h', -1)
+    encoded = s.encode('utf-8')
+    return encode_big_endian('>h', len(encoded)) + encoded
+
+def parse_describe_topic_partitions_request(sock, remaining):
+    """
+    Parses a DescribeTopicPartitions (v0) request body.
+    The request is assumed to be structured as:
+      topics: array of topics
+         - int16: number of topics
+         For each topic:
+            - string: topic name (2-byte length + bytes)
+            - int32: partitions array length
+            - partitions: that many int32 partition ids (ignored)
+    Returns the first topic name.
+    """
+    body = read_n_bytes(sock, remaining)
+    topics_count = decode_big_endian('>h', body[:2])[0]
+    offset = 2
+    if topics_count >= 1:
+        topic_len = decode_big_endian('>h', body[offset: offset+2])[0]
+        offset += 2
+        topic = body[offset: offset+topic_len].decode('utf-8')
+        offset += topic_len
+        partitions_count = decode_big_endian('>i', body[offset: offset+4])[0]
+        offset += 4 + (partitions_count * 4)  # skip partition ids
+        return topic
+    return ""
+
+def build_describe_topic_partitions_response(correlation_id, topic):
+    """
+    Constructs a DescribeTopicPartitions response for an unknown topic.
+    The response body is:
+      - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
+      - topic_name: string (2 bytes length + UTF-8 bytes; same as in request)
+      - topic_id: 16 bytes of zero
+      - partitions: array of partitions:
+            int32 count (4 bytes), here 0 for empty.
+    The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
+    """
+    error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
+    topic_field = encode_string(topic)
+    topic_id = b'\x00' * 16
+    partitions = encode_big_endian('>i', 0)  # empty partitions array (count = 0)
+    body = encode_big_endian('>h', error_code) + topic_field + topic_id + partitions
+    msg_size = 4 + len(body)  # correlation_id (4 bytes) + body
+    response = encode_big_endian('>i', msg_size)
+    response += encode_big_endian('>i', correlation_id)
+    response += body
+    return response
 
 def read_n_bytes(sock, n):
     """
@@ -128,8 +185,8 @@ def build_api_versions_response(api_key, api_version, correlation_id):
         # Successful body:
         # error_code (2 bytes)
         # compact array length (1 byte) = 3 (i.e. 2 elements + 1)
-        # Entry 1: 2 (api_key) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
-        # Entry 2: same as above, 7 bytes
+        # Entry 1: ApiVersions (api_key 18) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
+        # Entry 2: DescribeTopicPartitions (api_key 75) + 2 (min_version) + 2 (max_version) + 1 = 7 bytes
         # throttle_time_ms (4 bytes)
         # overall TAG_BUFFER (1 byte)
         # Total = 2 + 1 + 7 + 7 + 4 + 1 = 22 bytes
@@ -172,14 +229,18 @@ def handle_client(client_socket):
                 print(f"Received api_key: {api_key}, api_version: {api_version}, correlation_id: {correlation_id}")
                 
                 # Discard any extra request bytes.
-                if remaining_size > 0:
-                    discard_remaining_request(client_socket, remaining_size, 0)
-                
-                # Process ApiVersions request.
                 if api_key == 18:
+                    if remaining_size > 0:
+                        discard_remaining_request(client_socket, remaining_size, 0)
                     response = build_api_versions_response(api_key, api_version, correlation_id)
                     client_socket.sendall(response)
-                    print(f"Sent response ({len(response)} bytes)")
+                    print(f"Sent ApiVersions response ({len(response)} bytes)")
+                elif api_key == 75:
+                    # DescribeTopicPartitions request (v0)
+                    topic = parse_describe_topic_partitions_request(client_socket, remaining_size)
+                    response = build_describe_topic_partitions_response(correlation_id, topic)
+                    client_socket.sendall(response)
+                    print(f"Sent DescribeTopicPartitions response ({len(response)} bytes)")
                 else:
                     print(f"Unknown api_key: {api_key}, no response sent")
             except IOError:
