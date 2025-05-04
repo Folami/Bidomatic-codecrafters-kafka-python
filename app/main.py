@@ -293,7 +293,7 @@ def handle_client(client_socket):
                     topic_name = parse_describe_topic_partitions_request(client_socket, request_body_size)
                     print(f"[{client_addr}] Parsed DescribeTopicPartitions v0 request for topic: '{topic_name}'")
                     # For now, always respond with UNKNOWN_TOPIC
-                    response = build_describe_topic_partitions_response(correlation_id, topic_name, 3)
+                    response = build_describe_topic_partitions_response(correlation_id, topic_name)
                     print(f"[{client_addr}] Sending DescribeTopicPartitions v0 (Unknown Topic) response ({len(response)} bytes)")
                 else:
                     print(f"[{client_addr}] Unsupported DescribeTopicPartitions version: {api_version}. Discarding body.")
