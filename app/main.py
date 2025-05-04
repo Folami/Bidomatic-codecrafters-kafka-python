@@ -56,29 +56,15 @@ def encode_string(s):
     return encode_big_endian('>h', len(encoded)) + encoded
 
 def parse_describe_topic_partitions_request(sock, remaining):
-    """
-    Parses a DescribeTopicPartitions (v0) request body.
-    The request is assumed to be structured as:
-      topics: array of topics
-         - int16: number of topics
-         For each topic:
-            - string: topic name (2-byte length + bytes)
-            - int32: partitions array length
-            - partitions: that many int32 partition ids (ignored)
-    Returns the first topic name.
-    """
-    body = read_n_bytes(sock, remaining)
-    topics_count = decode_big_endian('>h', body[:2])[0]
-    offset = 2
-    if topics_count >= 1:
-        topic_len = decode_big_endian('>h', body[offset: offset+2])[0]
-        offset += 2
-        topic = body[offset: offset+topic_len].decode('utf-8')
-        offset += topic_len
-        partitions_count = decode_big_endian('>i', body[offset: offset+4])[0]
-        offset += 4 + (partitions_count * 4)  # skip partition ids
-        return topic
-    return ""
+    # For v0, assume the request body begins with the topic string.
+    topic_len_bytes = read_n_bytes(sock, 2)
+    topic_len = decode_big_endian('>h', topic_len_bytes)[0]
+    topic_bytes = read_n_bytes(sock, topic_len)
+    # Discard any extra bytes (if any) from the request body.
+    bytes_read = 2 + topic_len
+    if remaining > bytes_read:
+        discard_remaining_request(sock, remaining, bytes_read)
+    return topic_bytes.decode('utf-8')
 
 def build_describe_topic_partitions_response(correlation_id, topic):
     """
