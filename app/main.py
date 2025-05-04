@@ -76,10 +76,12 @@ def read_string(sock):
     """
     len_bytes = read_n_bytes(sock, 2)
     length = decode_big_endian('h', len_bytes)[0]
+    print(f"read_string: Length bytes={len_bytes.hex()}, Length={length}")
     if length == -1:
-        return None, 2 # Return None and bytes read (2 for length)
+        return None, 2
     string_bytes = read_n_bytes(sock, length)
-    return string_bytes.decode('utf-8'), 2 + length # Return string and total bytes read
+    print(f"read_string: Read {length} bytes, Data={string_bytes.hex()}")
+    return string_bytes.decode('utf-8'), 2 + length
 
 def encode_fixed_string(s, length):
     """
@@ -102,9 +104,9 @@ def read_n_bytes(sock, n):
     while len(data) < n:
         chunk = sock.recv(n - len(data))
         if not chunk:
-            # Connection closed prematurely
             raise IOError(f"Connection closed while trying to read {n} bytes. Got {len(data)} bytes.")
         data += chunk
+    print(f"read_n_bytes: Requested={n}, Read={len(data)}, Data={data.hex()}")
     return data
 
 def discard_remaining_bytes(sock, remaining):
@@ -147,6 +149,7 @@ def read_request_header(sock):
     header_size = 8 + client_id_bytes_read # ApiKey/Ver/Corr + ClientId
     request_body_size = request_total_size - header_size
 
+    print(f"read_request_header: TotalSize={request_total_size}, HeaderSize={header_size}, BodySize={request_body_size}")
     return api_key, api_version, correlation_id, client_id, request_body_size
 
 # --- API Specific Request Parsing ---
@@ -159,11 +162,11 @@ def parse_describe_topic_partitions_request(sock, body_size):
     """
     # Read the topic name (v0 string)
     topic_name, topic_bytes_read = read_string(sock)
-
-    # Discard any remaining bytes in the body (shouldn't be any for v0, but good practice)
+    if topic_name is None:
+        topic_name = ""  # Handle null topic name as empty string for response
+    # Discard any remaining bytes in the body (e.g., next_cursor or tagged fields)
     if body_size > topic_bytes_read:
         discard_remaining_bytes(sock, body_size - topic_bytes_read)
-
     return topic_name
 
 # --- API Specific Response Building ---
@@ -246,20 +249,19 @@ def build_describe_topic_partitions_response(correlation_id, topic_name):
       - topic_name: fixed-length string (115 bytes, UTF-8 encoded, padded with zeros)
       - topic_id: 16 bytes of zeros (UUID all zeros)
       - partitions: int32 (4 bytes, count = 0 indicating an empty array)
-    The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
     """
     error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
+    if not isinstance(topic_name, str):
+        topic_name = ""  # Fallback to empty string if topic_name is invalid
+    print(f"build_describe_topic_partitions_response: topic_name='{topic_name}'")
 
     body = b""
     body += encode_big_endian('h', error_code)
-    body += encode_fixed_string(topic_name, 115)  # Changed from 96 to 115 bytes
-    body += b'\x00' * 16                         # Zeroed Topic ID
-    body += encode_big_endian('i', 0)            # Partition count = 0
+    body += encode_fixed_string(topic_name, 115)
+    body += b'\x00' * 16
+    body += encode_big_endian('i', 0)
 
-    # Response Header (Correlation ID only)
     header = encode_big_endian('i', correlation_id)
-
-    # Full Response: Size + Header + Body
     message_size = len(header) + len(body)
     response = encode_big_endian('i', message_size) + header + body
     return response
