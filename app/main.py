@@ -66,7 +66,7 @@ def read_request_header(sock):
       - 4 bytes: request message size (size of data following this field)
       - 2 bytes: request_api_key (INT16)
       - 2 bytes: request_api_version (INT16)
-      - 4 bytes: correlation_id (INT32)
+      - 4 bytes: correlation_id (INT32, signed)
     Returns:
       (api_key, api_version, correlation_id, remaining_size)
     where remaining_size = request_size - 8.
@@ -77,7 +77,8 @@ def read_request_header(sock):
     
     # Read remaining 8 bytes: api_key, api_version, correlation_id.
     header_bytes = read_n_bytes(sock, 8)
-    api_key, api_version, correlation_id = decode_big_endian('>hhI', header_bytes)
+    # Use '>hhi' to decode correlation_id as a signed int.
+    api_key, api_version, correlation_id = decode_big_endian('>hhi', header_bytes)
     
     remaining_size = request_size - 8
     return api_key, api_version, correlation_id, remaining_size
