@@ -107,12 +107,12 @@ def build_api_versions_response(api_key, api_version, correlation_id):
     The response format:
       - Body:
           error_code: INT16 (2 bytes)
-          api_keys (compact array): 1 byte (length = 2 for one element + 1)
+          api_keys (compact array): 1 byte (should be 2 for one element + 1)
           For success: one ApiVersion entry:
               api_key (INT16), min_version (INT16), max_version (INT16), TAG_BUFFER (1 byte, 0x00)
           throttle_time_ms: INT32 (4 bytes, 0)
           overall TAG_BUFFER: 1 byte (0x00)
-      - Total body sizes: 15 bytes for success, 8 bytes for error.
+      - Total successful body size: 15 bytes.
       - Full response: message_length (4 bytes) + correlation_id (4 bytes) + body.
     """
     error_code = 35 if (api_version < 0 or api_version > 4) else 0
@@ -126,19 +126,20 @@ def build_api_versions_response(api_key, api_version, correlation_id):
     else:
         # Successful body: 2 + 1 + (2+2+2+1) + 4 + 1 = 15 bytes.
         body = encode_big_endian('>h', error_code)
-        body += encode_big_endian('>B', 1)  # compact array length = 1
+        # Fix: set compact array length to 2 (1 element + 1)
+        body += encode_big_endian('>B', 2)
         entry = encode_big_endian('>h', 18) # api_key = 18
         entry += encode_big_endian('>h', 0)  # min_version = 0
         entry += encode_big_endian('>h', 4)  # max_version = 4
-        entry += b'\x00'                  # entry TAG_BUFFER
+        entry += b'\x00'                   # entry TAG_BUFFER
         body += entry
-        body += encode_big_endian('>i', 0)  # throttle_time_ms = 0
-        body += b'\x00'                   # overall TAG_BUFFER
+        body += encode_big_endian('>i', 0)   # throttle_time_ms = 0
+        body += b'\x00'                    # overall TAG_BUFFER
 
     # Total payload after message length field is: correlation_id (4 bytes) + body.
     msg_size = 4 + len(body)
-    response = encode_big_endian('>i', msg_size)      # message_length
-    response += encode_big_endian('>i', correlation_id)  # correlation_id
+    response = encode_big_endian('>i', msg_size)        # message_length
+    response += encode_big_endian('>i', correlation_id)   # correlation_id
     response += body
     return response
 
