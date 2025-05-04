@@ -81,7 +81,11 @@ def read_string(sock):
         return None, 2
     string_bytes = read_n_bytes(sock, length)
     print(f"read_string: Read {length} bytes, Data={string_bytes.hex()}")
-    return string_bytes.decode('utf-8'), 2 + length
+    try:
+        return string_bytes.decode('utf-8'), 2 + length
+    except UnicodeDecodeError:
+        print(f"read_string: Invalid UTF-8 data: {string_bytes.hex()}")
+        return "", 2 + length  # Fallback to empty string
 
 def encode_fixed_string(s, length):
     """
@@ -160,10 +164,14 @@ def parse_describe_topic_partitions_request(sock, body_size):
     Body: TopicName (STRING v0)
     Returns: topic_name (string)
     """
+    if body_size < 2:  # Minimum size for a nullable STRING
+        print(f"parse_describe_topic_partitions_request: Invalid body size {body_size}")
+        return ""
     # Read the topic name (v0 string)
     topic_name, topic_bytes_read = read_string(sock)
     if topic_name is None:
         topic_name = ""  # Handle null topic name as empty string for response
+    print(f"parse_describe_topic_partitions_request: Read {topic_bytes_read} bytes, Topic='{topic_name}', Remaining={body_size - topic_bytes_read}")
     # Discard any remaining bytes in the body (e.g., next_cursor or tagged fields)
     if body_size > topic_bytes_read:
         discard_remaining_bytes(sock, body_size - topic_bytes_read)
@@ -261,7 +269,7 @@ def build_describe_topic_partitions_response(correlation_id, topic_name):
     body += b'\x00' * 16
     body += encode_big_endian('i', 0)
 
-    header = encode_big_endian('i', correlation_id)
+    header = encode_big_endian('i', correlation_id)  # Only correlation ID, no tagged fields
     message_size = len(header) + len(body)
     response = encode_big_endian('i', message_size) + header + body
     return response
