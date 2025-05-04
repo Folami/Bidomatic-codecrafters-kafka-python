@@ -80,16 +80,17 @@ def build_describe_topic_partitions_response(correlation_id, topic):
     Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
     The response body is:
       - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
-      - topic_name: fixed 96-byte field (UTF-8 encoded, padded with zeros)
+      - topic_name: fixed 115-byte field (UTF-8 encoded, padded with zeros)
       - topic_id: 16 bytes of zero
       - partitions: int32 (4 bytes, count = 0 indicating an empty array)
     The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
     """
     error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
-    # Encode the topic name as a fixed-length 96-byte field.
-    topic_field = encode_fixed_string(topic, 96)
+    # Encode the topic name as a fixed-length 115-byte field
+    topic_field = encode_fixed_string(topic, 115)
     topic_id = b'\x00' * 16
     partitions = encode_big_endian('>i', 0)  # empty partitions array (count = 0)
+    
     body = encode_big_endian('>h', error_code) + topic_field + topic_id + partitions
     msg_size = 4 + len(body)  # 4 bytes for correlation_id + body length
     response = encode_big_endian('>i', msg_size)
