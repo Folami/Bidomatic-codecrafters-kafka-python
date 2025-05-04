@@ -238,13 +238,13 @@ def build_api_versions_response(correlation_id, api_version_requested):
     response = encode_big_endian('i', message_size) + header + body
     return response
 
-def build_describe_topic_partitions_response(correlation_id, topic_name, error_code):
+def build_describe_topic_partitions_response(correlation_id, topic_name):
     """
     Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
     The response body is:
       - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
       - topic_name: fixed-length string (96 bytes, UTF-8 encoded, padded with zeros)
-      - topic_id: 16 bytes of zero
+      - topic_id: 16 bytes of zeros (UUID all zeros)
       - partitions: int32 (4 bytes, count = 0 indicating an empty array)
     The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
     """
@@ -252,9 +252,9 @@ def build_describe_topic_partitions_response(correlation_id, topic_name, error_c
 
     body = b""
     body += encode_big_endian('h', error_code)
-    body += encode_fixed_string(topic_name, 96) # Pad/truncate requested name
-    body += b'\x00' * 16 # Zeroed Topic ID
-    body += encode_big_endian('i', 0) # Partition count = 0
+    body += encode_fixed_string(topic_name, 96)  # Pad/truncate requested name
+    body += b'\x00' * 16                         # Zeroed Topic ID
+    body += encode_big_endian('i', 0)              # Partition count = 0
 
     # Response Header (Correlation ID only)
     header = encode_big_endian('i', correlation_id)
@@ -293,7 +293,7 @@ def handle_client(client_socket):
                     topic_name = parse_describe_topic_partitions_request(client_socket, request_body_size)
                     print(f"[{client_addr}] Parsed DescribeTopicPartitions v0 request for topic: '{topic_name}'")
                     # For now, always respond with UNKNOWN_TOPIC
-                    response = build_describe_topic_partitions_response(correlation_id, topic_name)
+                    response = build_describe_topic_partitions_response(correlation_id, topic_name, 3)
                     print(f"[{client_addr}] Sending DescribeTopicPartitions v0 (Unknown Topic) response ({len(response)} bytes)")
                 else:
                     print(f"[{client_addr}] Unsupported DescribeTopicPartitions version: {api_version}. Discarding body.")
