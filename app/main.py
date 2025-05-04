@@ -55,6 +55,15 @@ def encode_string(s):
     encoded = s.encode('utf-8')
     return encode_big_endian('>h', len(encoded)) + encoded
 
+def encode_fixed_string(s, length):
+    """
+    Encodes the string s as UTF-8 and pads (or truncates) it to a fixed length.
+    """
+    encoded = s.encode('utf-8')
+    if len(encoded) > length:
+        encoded = encoded[:length]
+    return encoded.ljust(length, b'\x00')
+
 def parse_describe_topic_partitions_request(sock, remaining):
     # For v0, assume the request body begins with the topic string.
     topic_len_bytes = read_n_bytes(sock, 2)
@@ -68,21 +77,21 @@ def parse_describe_topic_partitions_request(sock, remaining):
 
 def build_describe_topic_partitions_response(correlation_id, topic):
     """
-    Constructs a DescribeTopicPartitions response for an unknown topic.
+    Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
     The response body is:
       - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
-      - topic_name: string (2 bytes length + UTF-8 bytes; same as in request)
+      - topic_name: fixed 96-byte field (UTF-8 encoded, padded with zeros)
       - topic_id: 16 bytes of zero
-      - partitions: array of partitions:
-            int32 count (4 bytes), here 0 for empty.
+      - partitions: int32 (4 bytes, count = 0 indicating an empty array)
     The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
     """
     error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
-    topic_field = encode_string(topic)
+    # Encode the topic name as a fixed-length 96-byte field.
+    topic_field = encode_fixed_string(topic, 96)
     topic_id = b'\x00' * 16
     partitions = encode_big_endian('>i', 0)  # empty partitions array (count = 0)
     body = encode_big_endian('>h', error_code) + topic_field + topic_id + partitions
-    msg_size = 4 + len(body)  # correlation_id (4 bytes) + body
+    msg_size = 4 + len(body)  # 4 bytes for correlation_id + body length
     response = encode_big_endian('>i', msg_size)
     response += encode_big_endian('>i', correlation_id)
     response += body
