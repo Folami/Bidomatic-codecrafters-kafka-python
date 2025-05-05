@@ -161,21 +161,87 @@ def read_request_header(sock):
 def parse_describe_topic_partitions_request(sock, body_size):
     """
     Parses the body of a DescribeTopicPartitions v0 request.
-    Body: TopicName (STRING v0)
-    Returns: topic_name (string)
+    Expected body format:
+      - topicsCount: INT16
+      - For each topic:
+            • topic_name: Kafka v0 string (2-byte length + UTF-8 bytes)
+            • partitionsCount: INT32
+            • For each partition: INT32 partition id
+    Returns the topic name of the first topic (or "" if none found).
     """
-    if body_size < 2:  # Minimum size for a nullable STRING
+    if body_size < 2:
         print(f"parse_describe_topic_partitions_request: Invalid body size {body_size}")
-        return
-    # Read the topic name (v0 string)
-    topic_name, topic_bytes_read = read_string(sock)
-    if topic_name is None:
-        topic_name = ""  # Handle null topic name as empty string for response
-    print(f"parse_describe_topic_partitions_request: Read {topic_bytes_read} bytes, Topic='{topic_name}', Remaining={body_size - topic_bytes_read}")
-    # Discard any remaining bytes in the body (e.g., next_cursor or tagged fields)
-    if body_size > topic_bytes_read:
-        discard_remaining_bytes(sock, body_size - topic_bytes_read)
-    return topic_name
+        return ""
+    
+    # Read topicsCount (INT16)
+    topics_count_bytes = read_n_bytes(sock, 2)
+    topics_count = decode_big_endian('h', topics_count_bytes)[0]
+    bytes_read = 2
+    first_topic = None
+
+    for i in range(topics_count):
+        # Read topic name (v0 string)
+        topic_name, topic_bytes_read = read_string(sock)
+        bytes_read += topic_bytes_read
+        # Read partitionsCount (INT32)
+        if body_size - bytes_read < 4:
+            raise IOError("Not enough bytes for partitions count")
+        partitions_count_bytes = read_n_bytes(sock, 4)
+        partitions_count = decode_big_endian('i', partitions_count_bytes)[0]
+        bytes_read += 4
+        # Skip partition IDs (each 4 bytes)
+        if partitions_count > 0:
+            skip = partitions_count * 4
+            discard_remaining_bytes(sock, skip)
+            bytes_read += skip
+        if first_topic is None:
+            first_topic = topic_name
+
+    if body_size > bytes_read:
+        discard_remaining_bytes(sock, body_size - bytes_read)
+    print(f"parse_describe_topic_partitions_request: Parsed topic='{first_topic}'")
+    return first_topic if first_topic is not None else ""
+
+
+def build_describe_topic_partitions_response(correlation_id, topic):
+    """
+    Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
+    Response Body format:
+       - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
+       - topic_name: fixed 96-byte field (UTF-8 encoded, padded with zeros)
+       - topic_id: 16 bytes of zeros (UUID all zeros)
+       - partitions_count: INT32 (4 bytes) = 0 (empty array)
+    The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
+    Total = 4 + 4 + (2+96+16+4) = 126 bytes.
+    """
+    error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
+    if not isinstance(topic, str):
+        topic = ""
+    print(f"build_describe_topic_partitions_response: topic_name='{topic}'")
+    
+    topic_bytes = topic.encode('utf-8')
+    # Create a fixed 96-byte topic field
+    topicField = encode_fixed_string(topic, 96)
+    
+    # Fixed topic_id: 16 bytes zeros
+    topicId = b'\x00' * 16
+
+    # Body size: error_code (2) + topic_field (96) + topic_id (16) + partitions_count (4)
+    bodySize = 2 + 96 + 16 + 4
+    buffer = bytearray(4 + 4 + bodySize)
+    # Use big-endian
+    buf = memoryview(buffer)
+    
+    # message_length = correlation_id (4) + body size
+    buf[:4] = encode_big_endian('i', 4 + bodySize)
+    buf[4:8] = encode_big_endian('i', correlation_id)
+    offset = 8
+    buf[offset:offset+2] = encode_big_endian('h', error_code); offset += 2
+    buf[offset:offset+96] = topicField; offset += 96
+    buf[offset:offset+16] = topicId; offset += 16
+    buf[offset:offset+4] = encode_big_endian('i', 0); offset += 4
+
+    return bytes(buffer)
 
 # --- API Specific Response Building ---
 
@@ -245,31 +311,6 @@ def build_api_versions_response(correlation_id, api_version_requested):
     header += b'\x00' # Tagged Fields for header (0 tags)
 
     # Full Response: Size + Header + Body
-    message_size = len(header) + len(body)
-    response = encode_big_endian('i', message_size) + header + body
-    return response
-
-def build_describe_topic_partitions_response(correlation_id, topic_name):
-    """
-    Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
-    The response body is:
-      - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
-      - topic_name: fixed-length string (115 bytes, UTF-8 encoded, padded with zeros)
-      - topic_id: 16 bytes of zeros (UUID all zeros)
-      - partitions: int32 (4 bytes, count = 0 indicating an empty array)
-    """
-    error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
-    if not isinstance(topic_name, str):
-        topic_name = ""  # Fallback to empty string if topic_name is invalid
-    print(f"build_describe_topic_partitions_response: topic_name='{topic_name}'")
-
-    body = b""
-    body += encode_big_endian('h', error_code)
-    body += encode_fixed_string(topic_name, 115)
-    body += b'\x00' * 16
-    body += encode_big_endian('i', 0)
-
-    header = encode_big_endian('i', correlation_id)  # Only correlation ID, no tagged fields
     message_size = len(header) + len(body)
     response = encode_big_endian('i', message_size) + header + body
     return response
