@@ -177,28 +177,54 @@ def parse_describe_topic_partitions_request(sock, body_size):
     topics_count_bytes = read_n_bytes(sock, 2)
     topics_count = decode_big_endian('h', topics_count_bytes)[0]
     bytes_read = 2
+
+    print(f"parse_describe_topic_partitions_request: Reading {topics_count} topics")
     first_topic = None
 
     for i in range(topics_count):
-        # Read topic name (v0 string)
-        topic_name, topic_bytes_read = read_string(sock)
-        bytes_read += topic_bytes_read
+        # Read topic name length (INT16)
+        name_len_bytes = read_n_bytes(sock, 2)
+        name_len = decode_big_endian('h', name_len_bytes)[0]
+        bytes_read += 2
+
+        # Validate length
+        if name_len < 0 or name_len > body_size - bytes_read:
+            print(f"parse_describe_topic_partitions_request: Invalid topic name length: {name_len}")
+            break
+
+        # Read topic name bytes
+        name_bytes = read_n_bytes(sock, name_len)
+        try:
+            topic_name = name_bytes.decode('utf-8')
+            if first_topic is None:
+                first_topic = topic_name
+        except UnicodeDecodeError:
+            print(f"parse_describe_topic_partitions_request: Invalid UTF-8 in topic name")
+            if first_topic is None:
+                first_topic = ""
+        bytes_read += name_len
+
         # Read partitionsCount (INT32)
         if body_size - bytes_read < 4:
-            raise IOError("Not enough bytes for partitions count")
+            print("parse_describe_topic_partitions_request: Not enough bytes for partitions count")
+            break
         partitions_count_bytes = read_n_bytes(sock, 4)
         partitions_count = decode_big_endian('i', partitions_count_bytes)[0]
         bytes_read += 4
-        # Skip partition IDs (each 4 bytes)
-        if partitions_count > 0:
-            skip = partitions_count * 4
-            discard_remaining_bytes(sock, skip)
-            bytes_read += skip
-        if first_topic is None:
-            first_topic = topic_name
 
+        # Skip partition IDs
+        if partitions_count > 0:
+            skip_bytes = partitions_count * 4
+            if skip_bytes > body_size - bytes_read:
+                print(f"parse_describe_topic_partitions_request: Not enough bytes for {partitions_count} partitions")
+                break
+            discard_remaining_bytes(sock, skip_bytes)
+            bytes_read += skip_bytes
+
+    # Discard any remaining bytes
     if body_size > bytes_read:
         discard_remaining_bytes(sock, body_size - bytes_read)
+
     print(f"parse_describe_topic_partitions_request: Parsed topic='{first_topic}'")
     return first_topic if first_topic is not None else ""
 
