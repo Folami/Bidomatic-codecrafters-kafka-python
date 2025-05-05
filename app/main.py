@@ -166,7 +166,7 @@ def parse_describe_topic_partitions_request(sock, body_size):
     """
     if body_size < 2:  # Minimum size for a nullable STRING
         print(f"parse_describe_topic_partitions_request: Invalid body size {body_size}")
-        return ""
+        return
     # Read the topic name (v0 string)
     topic_name, topic_bytes_read = read_string(sock)
     if topic_name is None:
