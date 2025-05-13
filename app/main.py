@@ -65,7 +65,7 @@ def decode_string(data, offset):
     length = decode_big_endian('h', data[offset:offset+2])[0]
     if length == -1:
         return None, offset + 2
-    start = offset + 1 + 1
+    start = offset + 2
     end = start + length
     return data[start:end].decode('utf-8'), end
 
@@ -170,63 +170,75 @@ def parse_describe_topic_partitions_request(sock, body_size):
     Returns the topic name of the first topic (or "" if none found).
     """
     if body_size < 2:
-        print(f"parse_describe_topic_partitions_request: Invalid body size {body_size}")
+        print(f"parse_describe_topic_partitions_request: Body too small for topicsCount ({body_size} bytes).")
+        if body_size > 0:
+            discard_remaining_bytes(sock, body_size)
         return ""
-    
+
+    bytes_consumed = 0
+    first_topic_name_found = None
+
     # Read topicsCount (INT16)
     topics_count_bytes = read_n_bytes(sock, 2)
     topics_count = decode_big_endian('h', topics_count_bytes)[0]
-    bytes_read = 2
+    bytes_consumed += 2
 
-    print(f"parse_describe_topic_partitions_request: Reading {topics_count} topics")
-    first_topic = None
+    if topics_count < 0: # Invalid count
+        print(f"parse_describe_topic_partitions_request: Invalid topics_count {topics_count}.")
+        if body_size - bytes_consumed > 0:
+            discard_remaining_bytes(sock, body_size - bytes_consumed)
+        return ""
+
+    print(f"parse_describe_topic_partitions_request: Expecting {topics_count} topics.")
 
     for i in range(topics_count):
-        # Read topic name length (INT16)
-        name_len_bytes = read_n_bytes(sock, 2)
-        name_len = decode_big_endian('h', name_len_bytes)[0]
-        bytes_read += 2
-
-        # Validate length
-        if name_len < 0 or name_len > body_size - bytes_read:
-            print(f"parse_describe_topic_partitions_request: Invalid topic name length: {name_len}")
+        # A Kafka string needs at least 2 bytes for its length field.
+        if body_size - bytes_consumed < 2:
+            print(f"parse_describe_topic_partitions_request: Not enough data for topic name length (topic {i+1}). Remaining: {body_size - bytes_consumed}")
             break
 
-        # Read topic name bytes
-        name_bytes = read_n_bytes(sock, name_len)
-        try:
-            topic_name = name_bytes.decode('utf-8')
-            if first_topic is None:
-                first_topic = topic_name
-        except UnicodeDecodeError:
-            print(f"parse_describe_topic_partitions_request: Invalid UTF-8 in topic name")
-            if first_topic is None:
-                first_topic = ""
-        bytes_read += name_len
+        topic_name, name_bytes_read = read_string(sock) # read_string handles -1 length for null string
+        bytes_consumed += name_bytes_read
+        
+        if first_topic_name_found is None:
+            first_topic_name_found = topic_name if topic_name is not None else ""
 
         # Read partitionsCount (INT32)
-        if body_size - bytes_read < 4:
-            print("parse_describe_topic_partitions_request: Not enough bytes for partitions count")
+        if body_size - bytes_consumed < 4:
+            print(f"parse_describe_topic_partitions_request: Not enough data for partitionsCount (topic {i+1}). Remaining: {body_size - bytes_consumed}")
             break
         partitions_count_bytes = read_n_bytes(sock, 4)
         partitions_count = decode_big_endian('i', partitions_count_bytes)[0]
-        bytes_read += 4
+        bytes_consumed += 4
 
-        # Skip partition IDs
-        if partitions_count > 0:
-            skip_bytes = partitions_count * 4
-            if skip_bytes > body_size - bytes_read:
-                print(f"parse_describe_topic_partitions_request: Not enough bytes for {partitions_count} partitions")
-                break
-            discard_remaining_bytes(sock, skip_bytes)
-            bytes_read += skip_bytes
+        if partitions_count < 0: # Invalid count
+            print(f"parse_describe_topic_partitions_request: Invalid partitions_count {partitions_count} for topic {i+1}.")
+            break # Malformed, stop parsing this request's topics
 
-    # Discard any remaining bytes
-    if body_size > bytes_read:
-        discard_remaining_bytes(sock, body_size - bytes_read)
+        num_partition_ids_to_read = partitions_count # If 0, this is 0.
+        bytes_for_partition_ids = num_partition_ids_to_read * 4
 
-    print(f"parse_describe_topic_partitions_request: Parsed topic='{first_topic}'")
-    return first_topic if first_topic is not None else ""
+        if body_size - bytes_consumed < bytes_for_partition_ids:
+            print(f"parse_describe_topic_partitions_request: Not enough data for {num_partition_ids_to_read} partition IDs (topic {i+1}). Remaining: {body_size - bytes_consumed}, Needed: {bytes_for_partition_ids}")
+            break
+        
+        if bytes_for_partition_ids > 0:
+            discard_remaining_bytes(sock, bytes_for_partition_ids)
+            bytes_consumed += bytes_for_partition_ids
+    
+    # Consume any remaining bytes specified by body_size, if not fully parsed.
+    if body_size > bytes_consumed:
+        print(f"parse_describe_topic_partitions_request: Discarding {body_size - bytes_consumed} unparsed bytes from request body.")
+        discard_remaining_bytes(sock, body_size - bytes_consumed)
+    elif body_size < bytes_consumed:
+        # This case should ideally not happen if read_n_bytes and read_string are accurate
+        # and body_size was correctly calculated by read_request_header.
+        # It implies we over-read, which is an issue with internal logic or socket stream.
+        print(f"parse_describe_topic_partitions_request: WARNING - Consumed {bytes_consumed} bytes, but body_size was {body_size}.")
+
+    parsed_topic_name = first_topic_name_found if first_topic_name_found is not None else ""
+    print(f"parse_describe_topic_partitions_request: Parsed first topic='{parsed_topic_name}'")
+    return parsed_topic_name
 
 
 def build_describe_topic_partitions_response(correlation_id, topic):
