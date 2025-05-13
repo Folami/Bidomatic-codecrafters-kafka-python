@@ -77,25 +77,21 @@ def read_string(sock):
     len_bytes = read_n_bytes(sock, 2)
     length = decode_big_endian('h', len_bytes)[0]
     print(f"read_string: Length bytes={len_bytes.hex()}, Length={length}")
-    if length == -1:
+    if length == -1: # Nullable string is null
         return None, 2
+    if length < 0: # Invalid length for any string type (non-nullable or nullable non-null)
+        print(f"read_string: Invalid negative length {length} (and not -1 for null). Treating as empty string.")
+        # Consumed 2 bytes for length, return empty string.
+        return "", 2
+    
+    # If length is 0, it's an empty string, read_n_bytes(sock, 0) will correctly return b""
     string_bytes = read_n_bytes(sock, length)
-    print(f"read_string: Read {length} bytes, Data={string_bytes.hex()}")
+    print(f"read_string: Read {length} bytes for string payload, Data={string_bytes.hex()}")
     try:
         return string_bytes.decode('utf-8'), 2 + length
     except UnicodeDecodeError:
         print(f"read_string: Invalid UTF-8 data: {string_bytes.hex()}")
         return "", 2 + length  # Fallback to empty string
-
-def encode_fixed_string(s, length):
-    """
-    Encodes the string s as UTF-8 and pads (or truncates) it to a fixed length.
-    """
-    encoded = s.encode('utf-8')
-    if len(encoded) > length:
-        encoded = encoded[:length]
-    # Pad with null bytes on the right
-    return encoded + b'\x00' * (length - len(encoded))
 
 # --- Socket Reading Helpers ---
 
@@ -170,7 +166,7 @@ def parse_describe_topic_partitions_request(sock, body_size):
     Returns the topic name of the first topic (or "" if none found).
     """
     if body_size < 2:
-        print(f"parse_describe_topic_partitions_request: Body too small for topicsCount ({body_size} bytes).")
+        print(f"P_DTP_R: Body too small for topicsCount ({body_size} bytes).")
         if body_size > 0:
             discard_remaining_bytes(sock, body_size)
         return ""
@@ -184,102 +180,116 @@ def parse_describe_topic_partitions_request(sock, body_size):
     bytes_consumed += 2
 
     if topics_count < 0: # Invalid count
-        print(f"parse_describe_topic_partitions_request: Invalid topics_count {topics_count}.")
+        print(f"P_DTP_R: Invalid topics_count {topics_count}.")
         if body_size - bytes_consumed > 0:
             discard_remaining_bytes(sock, body_size - bytes_consumed)
         return ""
 
-    print(f"parse_describe_topic_partitions_request: Expecting {topics_count} topics.")
+    print(f"P_DTP_R: Expecting {topics_count} topics.")
 
     for i in range(topics_count):
-        # A Kafka string needs at least 2 bytes for its length field.
-        if body_size - bytes_consumed < 2:
-            print(f"parse_describe_topic_partitions_request: Not enough data for topic name length (topic {i+1}). Remaining: {body_size - bytes_consumed}")
+        # Parse Topic Name (STRING)
+        if body_size - bytes_consumed < 2: # Not enough for name length field
+            print(f"P_DTP_R: Not enough data for topic_name length (topic {i+1}). Remaining: {body_size - bytes_consumed}")
             break
+        name_len_bytes = read_n_bytes(sock, 2)
+        bytes_consumed += 2
+        name_len = decode_big_endian('h', name_len_bytes)[0]
 
-        topic_name, name_bytes_read = read_string(sock) # read_string handles -1 length for null string
-        bytes_consumed += name_bytes_read
+        current_topic_name_str = ""
+        if name_len < 0: # Kafka STRING length must be >= 0
+            print(f"P_DTP_R: Invalid topic_name length {name_len} for topic {i+1}. STRING requires >= 0.")
+            # Malformed. Treat as empty name for this topic.
+        elif name_len > 0: # Only read payload if length > 0
+            if name_len > body_size - bytes_consumed:
+                print(f"P_DTP_R: Stated topic_name length {name_len} for topic {i+1} exceeds remaining body bytes {body_size - bytes_consumed}. Malformed.")
+                if first_topic_name_found is None: first_topic_name_found = "" # Ensure it's set if this was the first
+                break # Stop parsing topics, rest of body will be discarded.
+            
+            name_payload_bytes = read_n_bytes(sock, name_len)
+            bytes_consumed += name_len
+            try:
+                current_topic_name_str = name_payload_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                print(f"P_DTP_R: Topic_name for topic {i+1} had UTF-8 decode error. Treating as empty.")
+                # current_topic_name_str remains ""
+        # If name_len == 0, current_topic_name_str is already ""
         
         if first_topic_name_found is None:
-            first_topic_name_found = topic_name if topic_name is not None else ""
-
-        # Read partitionsCount (INT32)
-        if body_size - bytes_consumed < 4:
-            print(f"parse_describe_topic_partitions_request: Not enough data for partitionsCount (topic {i+1}). Remaining: {body_size - bytes_consumed}")
+            first_topic_name_found = current_topic_name_str
+        
+        # Parse Partitions for this topic
+        if body_size - bytes_consumed < 4: # Not enough for partitionsCount field
+            print(f"P_DTP_R: Not enough data for partitionsCount (topic {i+1}). Remaining: {body_size - bytes_consumed}")
             break
         partitions_count_bytes = read_n_bytes(sock, 4)
-        partitions_count = decode_big_endian('i', partitions_count_bytes)[0]
         bytes_consumed += 4
+        partitions_count = decode_big_endian('i', partitions_count_bytes)[0]
 
-        if partitions_count < 0: # Invalid count
-            print(f"parse_describe_topic_partitions_request: Invalid partitions_count {partitions_count} for topic {i+1}.")
-            break # Malformed, stop parsing this request's topics
-
-        num_partition_ids_to_read = partitions_count # If 0, this is 0.
+        if partitions_count < 0:
+            print(f"P_DTP_R: Invalid partitions_count {partitions_count} for topic {i+1}.")
+            break # Malformed. Stop parsing topics.
+        
+        num_partition_ids_to_read = partitions_count # If count is 0, this is 0.
         bytes_for_partition_ids = num_partition_ids_to_read * 4
 
-        if body_size - bytes_consumed < bytes_for_partition_ids:
-            print(f"parse_describe_topic_partitions_request: Not enough data for {num_partition_ids_to_read} partition IDs (topic {i+1}). Remaining: {body_size - bytes_consumed}, Needed: {bytes_for_partition_ids}")
-            break
-        
-        if bytes_for_partition_ids > 0:
-            discard_remaining_bytes(sock, bytes_for_partition_ids)
+        if bytes_for_partition_ids > 0: # Only try to read if count > 0
+            if bytes_for_partition_ids > body_size - bytes_consumed:
+                print(f"P_DTP_R: Stated {bytes_for_partition_ids} bytes for partition IDs (topic {i+1}) exceeds remaining body bytes {body_size - bytes_consumed}. Malformed.")
+                break # Malformed. Stop parsing topics.
+            
+            # We just discard partition IDs as per problem spec for now
+            discard_remaining_bytes(sock, bytes_for_partition_ids) 
             bytes_consumed += bytes_for_partition_ids
     
     # Consume any remaining bytes specified by body_size, if not fully parsed.
     if body_size > bytes_consumed:
-        print(f"parse_describe_topic_partitions_request: Discarding {body_size - bytes_consumed} unparsed bytes from request body.")
+        print(f"P_DTP_R: Discarding {body_size - bytes_consumed} unparsed bytes from request body.")
         discard_remaining_bytes(sock, body_size - bytes_consumed)
     elif body_size < bytes_consumed:
-        # This case should ideally not happen if read_n_bytes and read_string are accurate
-        # and body_size was correctly calculated by read_request_header.
-        # It implies we over-read, which is an issue with internal logic or socket stream.
-        print(f"parse_describe_topic_partitions_request: WARNING - Consumed {bytes_consumed} bytes, but body_size was {body_size}.")
+        print(f"P_DTP_R: WARNING - Consumed {bytes_consumed} bytes, but body_size was {body_size}.")
 
     parsed_topic_name = first_topic_name_found if first_topic_name_found is not None else ""
-    print(f"parse_describe_topic_partitions_request: Parsed first topic='{parsed_topic_name}'")
+    print(f"P_DTP_R: Parsed first topic='{parsed_topic_name}'")
     return parsed_topic_name
 
 
-def build_describe_topic_partitions_response(correlation_id, topic):
+def build_describe_topic_partitions_response(correlation_id, topic_name_str):
     """
     Constructs a DescribeTopicPartitions (v0) response for an unknown topic.
     Response Body format:
        - error_code: INT16 (2 bytes) = 3 (UNKNOWN_TOPIC_OR_PARTITION)
-       - topic_name: fixed 96-byte field (UTF-8 encoded, padded with zeros)
+       - topic_name: STRING (INT16 length + UTF-8 bytes)
        - topic_id: 16 bytes of zeros (UUID all zeros)
        - partitions_count: INT32 (4 bytes) = 0 (empty array)
     The full response is: message_length (4 bytes) + correlation_id (4 bytes) + body.
-    Total = 4 + 4 + (2+96+16+4) = 126 bytes.
     """
     error_code = 3  # UNKNOWN_TOPIC_OR_PARTITION
-    if not isinstance(topic, str):
-        topic = ""
-    print(f"build_describe_topic_partitions_response: topic_name='{topic}'")
     
-    topic_bytes = topic.encode('utf-8')
-    # Create a fixed 96-byte topic field
-    topicField = encode_fixed_string(topic, 96)
-    
-    # Fixed topic_id: 16 bytes zeros
-    topicId = b'\x00' * 16
+    if not isinstance(topic_name_str, str):
+        topic_name_str = "" # Default to empty string if not a string
+    print(f"build_describe_topic_partitions_response: topic_name='{topic_name_str}' for response.")
 
-    # Body size: error_code (2) + topic_field (96) + topic_id (16) + partitions_count (4)
-    bodySize = 2 + 96 + 16 + 4
-    buffer = bytearray(4 + 4 + bodySize)
-    # Use big-endian
-    buf = memoryview(buffer)
-    
-    # message_length = correlation_id (4) + body size
-    buf[:4] = encode_big_endian('i', 4 + bodySize)
-    buf[4:8] = encode_big_endian('i', correlation_id)
-    offset = 8
-    buf[offset:offset+2] = encode_big_endian('h', error_code); offset += 2
-    buf[offset:offset+96] = topicField; offset += 96
-    buf[offset:offset+16] = topicId; offset += 16
-    buf[offset:offset+4] = encode_big_endian('i', 0); offset += 4
+    error_code_bytes = encode_big_endian('h', error_code)
+    # encode_string prepends INT16 length to the UTF-8 encoded string bytes
+    topic_name_encoded_as_kafka_string = encode_string(topic_name_str)
+    topic_id_bytes = b'\x00' * 16  # Nil UUID (16 zero bytes)
+    partitions_count_bytes = encode_big_endian('i', 0) # partitions_count = 0
 
-    return bytes(buffer)
+    response_body = error_code_bytes + \
+                    topic_name_encoded_as_kafka_string + \
+                    topic_id_bytes + \
+                    partitions_count_bytes
+    
+    # Response Header for v0 is just the Correlation ID
+    response_header = encode_big_endian('i', correlation_id)
+    
+    message_size = len(response_header) + len(response_body)
+    
+    full_response = encode_big_endian('i', message_size) + response_header + response_body
+    
+    print(f"build_describe_topic_partitions_response: Sending response. MessageSize={message_size}, HeaderLen={len(response_header)}, BodyLen={len(response_body)}")
+    return full_response
 
 # --- API Specific Response Building ---
 
