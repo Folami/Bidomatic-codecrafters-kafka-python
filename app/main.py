@@ -65,7 +65,7 @@ def decode_string(data, offset):
     length = decode_big_endian('h', data[offset:offset+2])[0]
     if length == -1:
         return None, offset + 2
-    start = offset + 2
+    start = offset + 1 + 1
     end = start + length
     return data[start:end].decode('utf-8'), end
 
