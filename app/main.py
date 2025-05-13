@@ -140,7 +140,7 @@ def read_request_header(sock):
 
     # 2. Read ApiKey, ApiVersion, CorrelationId (2 + 2 + 4 = 8 bytes)
     api_corr_bytes = read_n_bytes(sock, 8)
-    api_key, api_version, correlation_id = decode_big_endian('h h i', api_corr_bytes)
+    api_key api_version, correlation_id = decode_big_endian('h h i', api_corr_bytes)
 
     # 3. Read ClientId (v0 String: INT16 length + bytes)
     client_id, client_id_bytes_read = read_string(sock)
