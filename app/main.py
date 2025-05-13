@@ -79,7 +79,7 @@ def read_string(sock):
     print(f"read_string: Length bytes={len_bytes.hex()}, Length={length}")
     if length == -1:
         return None, 2
-    stringbytes = read_n_bytes(sock, length)
+    string_bytes = read_n_bytes(sock, length)
     print(f"read_string: Read {length} bytes, Data={string_bytes.hex()}")
     try:
         return string_bytes.decode('utf-8'), 2 + length
