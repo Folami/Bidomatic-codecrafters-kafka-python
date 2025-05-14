@@ -110,7 +110,10 @@ def handle_client(client_socket):
             else:
                 version = {0, 1, 2, 3, 4}
                 error_code = 0 if api_version in version else 35
-                response = create_msg(Correlation_ID, api_key, error_code)
+                response = build_api_versions_response(
+                    Correlation_ID,
+                    api_version,
+                )
                 client_socket.sendall(response)
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
