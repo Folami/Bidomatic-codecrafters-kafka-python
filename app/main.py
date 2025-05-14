@@ -106,12 +106,12 @@ def handle_client(client_socket):
                     topic_name_length,
                     topic_name,
                 )
-                client.sendall(response)
+                client_socket.sendall(response)
             else:
                 version = {0, 1, 2, 3, 4}
                 error_code = 0 if api_version in version else 35
                 response = create_msg(Coreleation_ID, api_key, error_code)
-                client.sendall(response)
+                client_socket.sendall(response)
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
     finally:
@@ -129,6 +129,6 @@ def main():
         client_Thread = threading.Thread(target=handle_client, args=(client,))
         client_Thread.start()
 
-        
+
 if __name__ == "__main__":
     main()
