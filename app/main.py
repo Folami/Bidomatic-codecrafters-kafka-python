@@ -76,7 +76,7 @@ def handle_client(client_socket):
                 break
             api_key = int.from_bytes(req[4:6], byteorder="big")
             api_version = int.from_bytes(req[6:8], byteorder="big")
-            Coreleation_ID = int.from_bytes(req[8:12], byteorder="big")
+            Correlation_ID = int.from_bytes(req[8:12], byteorder="big")
             if api_key == 75:
                 client_id_len = int.from_bytes(req[12:14])
                 print(client_id_len)
@@ -99,8 +99,8 @@ def handle_client(client_socket):
                 cursor_length = topic_name_starter + topic_name_length + 4
                 cursor = req[cursor_length]
                 cursor_bytes = int(cursor).to_bytes(1, byteorder="big")
-                response = response_api_key_75(
-                    Coreleation_ID,
+                response = build_describe_topic_partitions_response(
+                    Correlation_ID,
                     cursor_bytes,
                     array_length,
                     topic_name_length,
@@ -110,7 +110,7 @@ def handle_client(client_socket):
             else:
                 version = {0, 1, 2, 3, 4}
                 error_code = 0 if api_version in version else 35
-                response = create_msg(Coreleation_ID, api_key, error_code)
+                response = create_msg(Correlation_ID, api_key, error_code)
                 client_socket.sendall(response)
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
