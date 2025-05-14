@@ -115,7 +115,7 @@ def handle_client(client_socket):
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
     finally:
-        client.close()
+        client_socket.close()
         
 def main():
     # You can use print statements as follows for debugging,
