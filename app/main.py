@@ -60,35 +60,35 @@ def create_msg(id, api_key: int, error_code: int = 0):
     return int(total_len).to_bytes(4, byteorder="big") + response_header + response_body
 
 def handle_client(client):
-    def parse_request_header(req: bytes) -> tuple[int, int, int]:
+    def parse_request_header(request: bytes) -> tuple[int, int, int]:
         """Parse Kafka request header: api_key, api_version, correlation_id."""
-        api_key = int.from_bytes(req[4:6], byteorder="big")
-        api_version = int.from_bytes(req[6:8], byteorder="big")
-        correlation_id = int.from_bytes(req[8:12], byteorder="big")
+        api_key = int.from_bytes(request[4:6], byteorder="big")
+        api_version = int.from_bytes(request[6:8], byteorder="big")
+        correlation_id = int.from_bytes(request[8:12], byteorder="big")
         print(f"parse_request_header: api_key={api_key}, api_version={api_version}, correlation_id={correlation_id}")
         return api_key, api_version, correlation_id
 
-    def parse_client_id(req: bytes) -> tuple[str, int, bytes]:
+    def parse_client_id(request: bytes) -> tuple[str, int, bytes]:
         """Parse client_id STRING and tagged field, returning client_id, length, and tagged byte."""
-        client_id_len = int.from_bytes(req[12:14], byteorder="big")
+        client_id_len = int.from_bytes(request[12:14], byteorder="big")
         print(f"parse_client_id: client_id_len={client_id_len}")
         if client_id_len > 0:
-            client_id = req[14:14 + client_id_len].decode('utf-8', errors='ignore')
-            tagged = req[14 + client_id_len]
+            client_id = request[14:14 + client_id_len].decode('utf-8', errors='ignore')
+            tagged = request[14 + client_id_len]
         else:
             client_id = ""
             tagged = [14]  # Preserve original (unused) list assignment
         return client_id, client_id_len, tagged
 
-    def parse_describe_topic_partitions(req: bytes, client_id_len: int) -> tuple[int, int, bytes, bytes]:
+    def parse_describe_topic_partitions(request: bytes, client_id_len: int) -> tuple[int, int, bytes, bytes]:
         """Parse DescribeTopicPartitions request body, returning array_length, topic_name_length, topic_name, cursor."""
         array_len_finder = 14 + client_id_len + 1
-        array_length = req[array_len_finder]
-        topic_name_length = req[array_len_finder + 1]
+        array_length = request[array_len_finder]
+        topic_name_length = request[array_len_finder + 1]
         topic_name_starter = array_len_finder + 2
-        topic_name = bytes(req[topic_name_starter:topic_name_starter + (topic_name_length - 1)])
+        topic_name = bytes(request[topic_name_starter:topic_name_starter + (topic_name_length - 1)])
         cursor_length = topic_name_starter + topic_name_length + 4
-        cursor = req[cursor_length]
+        cursor = request[cursor_length]
         cursor_bytes = int(cursor).to_bytes(1, byteorder="big")
         print(f"P_DTP_R: array_length={array_length}, topic_name_length={topic_name_length}, "
               f"topic_name={topic_name.decode('utf-8', errors='ignore')}, cursor={cursor}")
@@ -96,13 +96,13 @@ def handle_client(client):
 
     try:
         while True:
-            req = client.recv(1024)
-            if not req:
+            request = client.recv(1024)
+            if not request:
                 break
-            api_key, api_version, correlation_id = parse_request_header(req)
+            api_key, api_version, correlation_id = parse_request_header(request)
             if api_key == 75:
-                client_id, client_id_len, tagged = parse_client_id(req)
-                array_length, topic_name_length, topic_name, cursor_bytes = parse_describe_topic_partitions(req, client_id_len)
+                client_id, client_id_len, tagged = parse_client_id(request)
+                array_length, topic_name_length, topic_name, cursor_bytes = parse_describe_topic_partitions(request, client_id_len)
                 response = response_api_key_75(
                     correlation_id,
                     cursor_bytes,
