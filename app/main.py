@@ -59,7 +59,7 @@ def create_msg(id, api_key: int, error_code: int = 0):
     total_len = len(response_header) + len(response_body)
     return int(total_len).to_bytes(4, byteorder="big") + response_header + response_body
 
-def handle(client):
+def handle_client(client):
     try:
         while True:
             req = client.recv(1024)
@@ -67,15 +67,15 @@ def handle(client):
                 break
             api_key = int.from_bytes(req[4:6], byteorder="big")
             api_version = int.from_bytes(req[6:8], byteorder="big")
-            Coreleation_ID = int.from_bytes(req[8:12], byteorder="big")
+            correlation_id = int.from_bytes(req[8:12], byteorder="big")
             if api_key == 75:
                 client_id_len = int.from_bytes(req[12:14])
                 print(client_id_len)
                 if client_id_len > 0:
-                    cliend_id = req[14 : 14 + client_id_len]
+                    client_id = req[14 : 14 + client_id_len]
                     tagged = req[14 + client_id_len]
                 else:
-                    cliend_id = ""
+                    client_id = ""
                     tagged = [14]
                 array_len_finder = 14 + client_id_len + 1
                 array_length = req[array_len_finder]
@@ -91,7 +91,7 @@ def handle(client):
                 cursor = req[cursor_length]
                 cursor_bytes = int(cursor).to_bytes(1, byteorder="big")
                 response = response_api_key_75(
-                    Coreleation_ID,
+                    correlation_id,
                     cursor_bytes,
                     array_length,
                     topic_name_length,
@@ -101,23 +101,52 @@ def handle(client):
             else:
                 version = {0, 1, 2, 3, 4}
                 error_code = 0 if api_version in version else 35
-                response = create_msg(Coreleation_ID, api_key, error_code)
+                response = create_msg(correlation_id, api_key, error_code)
                 client.sendall(response)
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
     finally:
         client.close()
         
-def main():
-    # You can use print statements as follows for debugging,
-    # they'll be visible when running tests.
+
+# --- Server Logic ---
+
+def run_server(port):
+    """
+    Runs the Kafka clone server on the specified port.
+    Accepts new client connections concurrently, and delegates request processing to handle_client().
+    """
+    server = socket.create_server(("localhost", port), reuse_port=True)
+    print(f"Server listening on port {port}")
+    try:
+        while True:
+            client_socket, client_address = server.accept()
+            print(f"Connection from {client_address} has been established!")
+            # Spawn a thread for each client.
+            thread = threading.Thread(target=handle_client, args=(client_socket,), daemon=True)
+            thread.start()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+    finally:
+        server.close()
+        print("Server closed.")
+
+
+# --- Main Execution ---
+
+def run():
+    """
+    Main entry point.
+    Starts the server and prints logs for each request and response.
+    """
+    port = 9092
+    print(f"Starting server on port {port}...")
     print("Logs from your program will appear here!")
-    # Uncomment this to pass the first stage
-    #
-    server = socket.create_server(("localhost", 9092), reuse_port=True)
-    while True:
-        client, addr = server.accept()
-        client_Thread = threading.Thread(target=handle, args=(client,))
-        client_Thread.start()
+    try:
+        run_server(port)
+    except Exception as e:
+        print(f"Server failed to start or run: {e}")
+
+
 if __name__ == "__main__":
-    main()
+    run()
