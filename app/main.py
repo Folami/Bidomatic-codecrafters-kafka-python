@@ -108,16 +108,44 @@ def handle(client):
     finally:
         client.close()
         
-def main():
-    # You can use print statements as follows for debugging,
-    # they'll be visible when running tests.
+# --- Server Logic ---
+
+def run_server(port):
+    """
+    Runs the Kafka clone server on the specified port.
+    Accepts new client connections concurrently, and delegates request processing to handle_client().
+    """
+    server = socket.create_server(("localhost", port), reuse_port=True)
+    print(f"Server listening on port {port}")
+    try:
+        while True:
+            client_socket, client_address = server.accept()
+            print(f"Connection from {client_address} has been established!")
+            # Spawn a thread for each client.
+            thread = threading.Thread(target=handle, args=(client_socket,), daemon=True)
+            thread.start()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+    finally:
+        server.close()
+        print("Server closed.")
+
+
+# --- Main Execution ---
+
+def run():
+    """
+    Main entry point.
+    Starts the server and prints logs for each request and response.
+    """
+    port = 9092
+    print(f"Starting server on port {port}...")
     print("Logs from your program will appear here!")
-    # Uncomment this to pass the first stage
-    #
-    server = socket.create_server(("localhost", 9092), reuse_port=True)
-    while True:
-        client, addr = server.accept()
-        client_Thread = threading.Thread(target=handle, args=(client,))
-        client_Thread.start()
+    try:
+        run_server(port)
+    except Exception as e:
+        print(f"Server failed to start or run: {e}")
+
+
 if __name__ == "__main__":
-    main()
+    run()
