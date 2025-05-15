@@ -1,17 +1,12 @@
 import socket
 import threading
-import struct
 
 def encode_big_endian(value: int, size: int) -> bytes:
-    """
-    Encode an integer to big-endian bytes with the specified size.
-    """
+    """Encode an integer to big-endian bytes with the specified size."""
     return value.to_bytes(size, byteorder="big")
 
 def encode_kafka_string(s: bytes) -> bytes:
-    """
-    Encode a byte string as a Kafka v0 STRING (2-byte length + bytes).
-    """
+    """Encode a byte string as a Kafka v0 STRING (2-byte length + bytes)."""
     length = len(s)
     return encode_big_endian(length, 2) + s
 
@@ -23,6 +18,7 @@ def read_n_bytes(sock: socket.socket, n: int) -> bytes:
         if not chunk:
             raise IOError(f"Connection closed while reading {n} bytes. Got {len(data)} bytes.")
         data += chunk
+    print(f"read_n_bytes: Read {len(data)} bytes: {data.hex()}")
     return data
 
 def parse_request_header(data: bytes) -> tuple[int, int, int, int]:
@@ -31,76 +27,38 @@ def parse_request_header(data: bytes) -> tuple[int, int, int, int]:
     api_key = int.from_bytes(data[4:6], byteorder="big")
     api_version = int.from_bytes(data[6:8], byteorder="big")
     correlation_id = int.from_bytes(data[8:12], byteorder="big")
+    print(f"parse_request_header: message_size={message_size}, api_key={api_key}, api_version={api_version}, correlation_id={correlation_id}")
     return message_size, api_key, api_version, correlation_id
 
 def parse_client_id(data: bytes, offset: int) -> tuple[bytes, int]:
     """Parse Kafka v0 STRING for client_id, returning the client_id and bytes consumed."""
     client_id_len = int.from_bytes(data[offset:offset+2], byteorder="big")
+    print(f"parse_client_id: client_id_len={client_id_len}")
     if client_id_len <= 0:
         return b"", 2
     client_id = data[offset+2:offset+2+client_id_len]
     return client_id, 2 + client_id_len
 
-def parse_describe_topic_partitions(data: bytes, offset: int, body_size: int) -> tuple[bytes, int]:
-    """Parse DescribeTopicPartitions v0 request body, returning first topic name and cursor."""
-    bytes_consumed = 0
-    if body_size < 2:
-        print(f"P_DTP_R: Body too small for topics_count ({body_size} bytes).")
-        return b"", 0
-
-    topics_count = int.from_bytes(data[offset:offset+2], byteorder="big")
-    bytes_consumed += 2
-    if topics_count < 0:
-        print(f"P_DTP_R: Invalid topics_count {topics_count}.")
-        return b"", 0
-
-    print(f"P_DTP_R: Expecting {topics_count} topics.")
-    topic_name = b""
-    cursor = 0
-
-    for i in range(topics_count):
-        if body_size - bytes_consumed < 2:
-            print(f"P_DTP_R: Not enough data for topic_name length (topic {i+1}).")
-            break
-        topic_name_len = int.from_bytes(data[offset+bytes_consumed:offset+bytes_consumed+2], byteorder="big")
-        bytes_consumed += 2
-        if topic_name_len < 0:
-            print(f"P_DTP_R: Invalid topic_name length {topic_name_len} for topic {i+1}.")
-            continue
-        if topic_name_len > body_size - bytes_consumed:
-            print(f"P_DTP_R: Topic_name length {topic_name_len} exceeds remaining bytes.")
-            break
-
-        topic_name = data[offset+bytes_consumed:offset+bytes_consumed+topic_name_len]
-        bytes_consumed += topic_name_len
-
-        if body_size - bytes_consumed < 4:
-            print(f"P_DTP_R: Not enough data for partitions_count (topic {i+1}).")
-            break
-        partitions_count = int.from_bytes(data[offset+bytes_consumed:offset+bytes_consumed+4], byteorder="big")
-        bytes_consumed += 4
-        if partitions_count < 0:
-            print(f"P_DTP_R: Invalid partitions_count {partitions_count} for topic {i+1}.")
-            break
-
-        partition_bytes = partitions_count * 4
-        if partition_bytes > body_size - bytes_consumed:
-            print(f"P_DTP_R: Partition IDs exceed remaining bytes for topic {i+1}.")
-            break
-        bytes_consumed += partition_bytes
-
-        cursor = int.from_bytes(data[offset+bytes_consumed:offset+bytes_consumed+1], byteorder="big")
-        bytes_consumed += 1
-        break  # Only process first topic
-
-    return topic_name, cursor
+def parse_describe_topic_partitions(data: bytes, offset: int) -> tuple[bytes, int, int]:
+    """Parse DescribeTopicPartitions v0 request body, returning first topic name, array length, and cursor."""
+    array_len_finder = offset
+    array_length = int.from_bytes(data[array_len_finder:array_len_finder+1], byteorder="big")
+    print(f"P_DTP_R: array_length={array_length}")
+    topic_name_length = int.from_bytes(data[array_len_finder+1:array_len_finder+2], byteorder="big")
+    print(f"P_DTP_R: topic_name_length={topic_name_length}")
+    topic_name_start = array_len_finder + 2
+    topic_name = data[topic_name_start:topic_name_start+topic_name_length]
+    cursor_pos = topic_name_start + topic_name_length + 4
+    cursor = int.from_bytes(data[cursor_pos:cursor_pos+1], byteorder="big") if cursor_pos < len(data) else 0
+    print(f"P_DTP_R: topic_name={topic_name.decode('utf-8', errors='ignore')}, cursor={cursor}")
+    return topic_name, array_length, cursor
 
 def build_api_versions_response(correlation_id: int, api_version: int) -> bytes:
     """Build ApiVersions response, returning error 35 for unsupported versions."""
     supported_versions = {0, 1, 2, 3, 4}
     error_code = 0 if api_version in supported_versions else 35
+    response_header = encode_big_endian(correlation_id, 4)
     tag_buffer = b"\x00"
-    response_header = encode_big_endian(correlation_id, 4) + tag_buffer
 
     if error_code != 0:
         body = (
@@ -122,13 +80,13 @@ def build_api_versions_response(correlation_id: int, api_version: int) -> bytes:
     message_size = len(response_header) + len(body)
     return encode_big_endian(message_size, 4) + response_header + body
 
-def build_describe_topic_partitions_response(correlation_id: int, topic_name: bytes, cursor: int) -> bytes:
+def build_describe_topic_partitions_response(correlation_id: int, topic_name: bytes, array_length: int, cursor: int) -> bytes:
     """Build DescribeTopicPartitions v0 response for an unknown topic."""
     tag_buffer = b"\x00"
     response_header = encode_big_endian(correlation_id, 4) + tag_buffer
     body = (
         encode_big_endian(0, 4) +  # throttle_time_ms
-        b"\x01" +  # Array length (1 topic)
+        encode_big_endian(array_length, 1) +
         encode_big_endian(3, 2) +  # error_code (UNKNOWN_TOPIC_OR_PARTITION)
         encode_kafka_string(topic_name) +
         encode_big_endian(0, 16) +  # topic_id (nil UUID)
@@ -140,6 +98,7 @@ def build_describe_topic_partitions_response(correlation_id: int, topic_name: by
         tag_buffer
     )
     message_size = len(response_header) + len(body)
+    print(f"build_describe_topic_partitions_response: message_size={message_size}, topic_name={topic_name.decode('utf-8', errors='ignore')}")
     return encode_big_endian(message_size, 4) + response_header + body
 
 def handle_client(client_socket: socket.socket):
@@ -155,12 +114,11 @@ def handle_client(client_socket: socket.socket):
             message_size, api_key, api_version, correlation_id = parse_request_header(data)
             client_id_offset = 12
             client_id, client_id_bytes = parse_client_id(data, client_id_offset)
-            body_offset = client_id_offset + client_id_bytes
-            body_size = message_size - (body_offset - 4)
+            body_offset = client_id_offset + client_id_bytes + 1  # Skip tagged field
 
             if api_key == 75:
-                topic_name, cursor = parse_describe_topic_partitions(data, body_offset, body_size)
-                response = build_describe_topic_partitions_response(correlation_id, topic_name, cursor)
+                topic_name, array_length, cursor = parse_describe_topic_partitions(data, body_offset)
+                response = build_describe_topic_partitions_response(correlation_id, topic_name, array_length, cursor)
                 print(f"[{client_addr}] Sending DescribeTopicPartitions response for topic: {topic_name.decode('utf-8', errors='ignore')}")
             else:
                 response = build_api_versions_response(correlation_id, api_version)
