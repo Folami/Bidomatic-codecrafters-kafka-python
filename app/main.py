@@ -40,7 +40,7 @@ def create_msg(id, api_key: int, error_code: int = 0):
     )
     tag_buffer = b"\x00"
     num_api_keys = int(3).to_bytes(1, byteorder="big")
-    describle_topic_partition_api = int(75).to_bytes(2, byteorder="big")
+    describe_topic_partition_api = int(75).to_bytes(2, byteorder="big")
     throttle_time_ms = 0
     response_body = (
         err
@@ -49,7 +49,7 @@ def create_msg(id, api_key: int, error_code: int = 0):
         + min_version_api_18.to_bytes(2)
         + max_version_api_18.to_bytes(2)
         + tag_buffer
-        + describle_topic_partition_api
+        + describe_topic_partition_api
         + min_version_api_75.to_bytes(2)
         + max_version_api_75.to_bytes(2)
         + tag_buffer
