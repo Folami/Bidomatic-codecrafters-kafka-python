@@ -2,7 +2,7 @@ import socket  # noqa: F401
 import threading
 
 
-def build_describe_topic_partitions_response(id, cursor, array_length, length, topic_name):
+def response_api_key_75(id, cursor, array_length, length, topic_name):
     tag_buffer = b"\x00"
     response_header = id.to_bytes(4, byteorder="big") + tag_buffer
     error_code = int(3).to_bytes(2, byteorder="big")
@@ -28,16 +28,10 @@ def build_describe_topic_partitions_response(id, cursor, array_length, length, t
     total_len = len(response_header) + len(response_body)
     return int(total_len).to_bytes(4, byteorder="big") + response_header + response_body
 
-def build_api_versions_response(correlation_id: int, api_version_requested: int):
-    # Determine error_code based on api_version_requested, similar to main.py
-    # ApiVersions (api_key 18) supports versions 0-4
-    supported_min_version = 0
-    supported_max_version = 4
-    error_code = 0
-    if not (supported_min_version <= api_version_requested <= supported_max_version):
-        error_code = 35 # UNSUPPORTED_VERSION
-
+def create_msg(id, api_key: int, error_code: int = 0):
+    response_header = id.to_bytes(4, byteorder="big")
     err = error_code.to_bytes(2, byteorder="big")
+    api_key_bytes = api_key.to_bytes(2, byteorder="big")
     min_version_api_18, max_version_api_18, min_version_api_75, max_version_api_75 = (
         0,
         4,
@@ -46,13 +40,12 @@ def build_api_versions_response(correlation_id: int, api_version_requested: int)
     )
     tag_buffer = b"\x00"
     num_api_keys = int(3).to_bytes(1, byteorder="big")
-    api_versions_api_key_bytes = int(18).to_bytes(2, byteorder="big") # ApiKey for ApiVersions is 18
     describle_topic_partition_api = int(75).to_bytes(2, byteorder="big")
     throttle_time_ms = 0
     response_body = (
         err
         + num_api_keys
-        + api_versions_api_key_bytes # Entry for ApiKey 18
+        + api_key_bytes
         + min_version_api_18.to_bytes(2)
         + max_version_api_18.to_bytes(2)
         + tag_buffer
@@ -63,20 +56,18 @@ def build_api_versions_response(correlation_id: int, api_version_requested: int)
         + throttle_time_ms.to_bytes(4, byteorder="big")
         + tag_buffer
     )
-    # Header for flexible response: correlation_id + tag_buffer
-    response_header = correlation_id.to_bytes(4, byteorder="big") + tag_buffer
     total_len = len(response_header) + len(response_body)
     return int(total_len).to_bytes(4, byteorder="big") + response_header + response_body
 
-def handle_client(client_socket):
+def handle(client):
     try:
         while True:
-            req = client_socket.recv(1024)
+            req = client.recv(1024)
             if not req:
                 break
             api_key = int.from_bytes(req[4:6], byteorder="big")
             api_version = int.from_bytes(req[6:8], byteorder="big")
-            Correlation_ID = int.from_bytes(req[8:12], byteorder="big")
+            Coreleation_ID = int.from_bytes(req[8:12], byteorder="big")
             if api_key == 75:
                 client_id_len = int.from_bytes(req[12:14])
                 print(client_id_len)
@@ -99,26 +90,23 @@ def handle_client(client_socket):
                 cursor_length = topic_name_starter + topic_name_length + 4
                 cursor = req[cursor_length]
                 cursor_bytes = int(cursor).to_bytes(1, byteorder="big")
-                response = build_describe_topic_partitions_response(
-                    Correlation_ID,
+                response = response_api_key_75(
+                    Coreleation_ID,
                     cursor_bytes,
                     array_length,
                     topic_name_length,
                     topic_name,
                 )
-                client_socket.sendall(response)
+                client.sendall(response)
             else:
                 version = {0, 1, 2, 3, 4}
                 error_code = 0 if api_version in version else 35
-                response = build_api_versions_response(
-                    Correlation_ID,
-                    api_version,
-                )
-                client_socket.sendall(response)
+                response = create_msg(Coreleation_ID, api_key, error_code)
+                client.sendall(response)
     except Exception as e:
         print(f"Except Error Handling Client: {e}")
     finally:
-        client_socket.close()
+        client.close()
         
 def main():
     # You can use print statements as follows for debugging,
@@ -129,9 +117,7 @@ def main():
     server = socket.create_server(("localhost", 9092), reuse_port=True)
     while True:
         client, addr = server.accept()
-        client_Thread = threading.Thread(target=handle_client, args=(client,))
+        client_Thread = threading.Thread(target=handle, args=(client,))
         client_Thread.start()
-
-
 if __name__ == "__main__":
     main()
