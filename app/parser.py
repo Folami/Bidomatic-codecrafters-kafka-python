@@ -45,7 +45,7 @@ class ByteParser:
         self.index = 0
         self.finished = False
 
-    def consume_svarint(self, signed=True):
+    def consume_var_int(self, signed=True):
         shift = 0
         value = 0
         aux = MSB_SET_MASK
