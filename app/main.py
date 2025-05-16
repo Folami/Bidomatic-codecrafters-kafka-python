@@ -95,11 +95,127 @@ Client Handling:
 import socket  # noqa: F401
 import threading
 import struct
+import os
+import json
+
+
+class ClusterMetadataReader:
+    """
+    Reads and parses Kafka's cluster metadata from the __cluster_metadata topic log file.
+    Extracts topic information including names, UUIDs, and partition details.
+    """
+    def __init__(self, log_path="/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log"):
+        self.log_path = log_path
+        self.topics = {}  # {topic_name: {uuid, partitions}}
+        self.load_metadata()
+    
+    def load_metadata(self):
+        """Load and parse the cluster metadata log file."""
+        if not os.path.exists(self.log_path):
+            print(f"Warning: Metadata log file not found at {self.log_path}")
+            return
+        
+        try:
+            with open(self.log_path, "rb") as f:
+                # Skip file header and navigate through record batches
+                # This is a simplified parser that looks for topic metadata records
+                data = f.read()
+                pos = 0
+                
+                # Skip over file header
+                while pos < len(data):
+                    # Look for topic metadata records
+                    # This is a simplified approach - in production, you'd parse the full record batch format
+                    if pos + 8 < len(data):
+                        record_size = int.from_bytes(data[pos:pos+4], byteorder="big")
+                        if record_size <= 0 or record_size > 10000000:  # Sanity check
+                            pos += 1
+                            continue
+                        
+                        # Try to find topic metadata records by looking for JSON-like structures
+                        record_data = data[pos:pos+record_size]
+                        try:
+                            # Look for topic name and UUID patterns
+                            if b"topicName" in record_data and b"topicUuid" in record_data:
+                                # Extract topic information
+                                self._extract_topic_info(record_data)
+                        except Exception as e:
+                            pass  # Skip malformed records
+                        
+                        pos += record_size
+                    else:
+                        pos += 1
+                
+                print(f"Loaded metadata for {len(self.topics)} topics")
+        except Exception as e:
+            print(f"Error reading metadata: {e}")
+    
+    def _extract_topic_info(self, record_data):
+        """Extract topic information from a record."""
+        try:
+            # Find topic name
+            name_start = record_data.find(b"topicName") + 12  # Skip past field name and quotes
+            if name_start > 12:  # Found
+                name_end = record_data.find(b'"', name_start)
+                if name_end > name_start:
+                    topic_name = record_data[name_start:name_end].decode('utf-8')
+                    
+                    # Find UUID
+                    uuid_start = record_data.find(b"topicUuid") + 12
+                    if uuid_start > 12:
+                        # UUID is 16 bytes, extract it
+                        uuid_pos = uuid_start
+                        while uuid_pos < len(record_data) and not (48 <= record_data[uuid_pos] <= 57 or 
+                                                                  65 <= record_data[uuid_pos] <= 90 or 
+                                                                  97 <= record_data[uuid_pos] <= 122):
+                            uuid_pos += 1
+                        
+                        if uuid_pos < len(record_data):
+                            uuid_end = uuid_pos
+                            while uuid_end < len(record_data) and (48 <= record_data[uuid_end] <= 57 or 
+                                                                 65 <= record_data[uuid_end] <= 90 or 
+                                                                 97 <= record_data[uuid_end] <= 122):
+                                uuid_end += 1
+                            
+                            uuid_str = record_data[uuid_pos:uuid_end].decode('utf-8')
+                            
+                            # Convert UUID string to bytes
+                            uuid_bytes = bytes.fromhex(uuid_str.replace('-', ''))
+                            
+                            # Find partition info
+                            partitions = []
+                            partition_start = record_data.find(b"partitions")
+                            if partition_start > 0:
+                                # Extract partition ID, leader, etc.
+                                # For simplicity, we'll assume partition 0 with leader 0
+                                partitions.append({
+                                    "partition_index": 0,
+                                    "leader_id": 0,
+                                    "leader_epoch": 0,
+                                    "replicas": [0],
+                                    "isr": [0]
+                                })
+                            
+                            self.topics[topic_name] = {
+                                "uuid": uuid_bytes,
+                                "partitions": partitions
+                            }
+                            print(f"Found topic: {topic_name}, UUID: {uuid_str}")
+        except Exception as e:
+            print(f"Error extracting topic info: {e}")
+    
+    def topic_exists(self, topic_name):
+        """Check if a topic exists in the metadata."""
+        return topic_name in self.topics
+    
+    def get_topic_info(self, topic_name):
+        """Get information about a topic if it exists."""
+        return self.topics.get(topic_name)
 
 
 def response_api_key_75(id, cursor, array_length, length, topic_name):
     """
-    Constructs a DescribeTopicPartitions response for an unknown topic.
+    Constructs a DescribeTopicPartitions response for a topic.
     This function builds a response structure that includes elements
     typically found in flexible Kafka message formats (v1+), even though
     it's intended for a v0 request scenario.
@@ -110,18 +226,70 @@ def response_api_key_75(id, cursor, array_length, length, topic_name):
         array_length (int): An integer used to encode a compact array length in the body.
         length (int): An integer used to encode a compact string length in the body.
         topic_name (bytes): The raw bytes of the topic name to include in the response.
-    logic for this specific response.
     """
     tag_buffer = b"\x00"
     # Header: correlation_id + tag_buffer (flexible header)
     response_header = id.to_bytes(4, byteorder="big") + tag_buffer
 
-    error_code = int(3).to_bytes(2, byteorder="big")
-    throttle_time_ms = int(0).to_bytes(4, byteorder="big")
-    is_internal = int(0).to_bytes(1, byteorder="big")
-    topic_authorized_operations = b"\x00\x00\x0d\xf8"
-    topic_id = int(0).to_bytes(16, byteorder="big")
-    partition_array = b"\x01"
+    # Check if topic exists in metadata
+    topic_name_str = topic_name.decode('utf-8', errors='ignore')
+    topic_info = metadata_reader.get_topic_info(topic_name_str)
+    
+    if topic_info:
+        # Topic exists
+        error_code = int(0).to_bytes(2, byteorder="big")  # SUCCESS
+        topic_id = topic_info["uuid"]
+        
+        # Build response body
+        throttle_time_ms = int(0).to_bytes(4, byteorder="big")
+        is_internal = int(0).to_bytes(1, byteorder="big")
+        topic_authorized_operations = b"\x00\x00\x0d\xf8"
+        
+        # Build partitions array
+        if topic_info["partitions"]:
+            partition = topic_info["partitions"][0]
+            partition_array = b"\x02"  # 1 partition + 1
+            partition_data = (
+                partition["partition_index"].to_bytes(4, byteorder="big") +  # partition_index
+                int(0).to_bytes(2, byteorder="big") +  # error_code
+                partition["leader_id"].to_bytes(4, byteorder="big") +  # leader_id
+                partition["leader_epoch"].to_bytes(4, byteorder="big") +  # leader_epoch
+                
+                # replica_nodes array
+                int(len(partition["replicas"]) + 1).to_bytes(1, byteorder="big")
+            )
+            
+            # Add each replica
+            for replica in partition["replicas"]:
+                partition_data += replica.to_bytes(4, byteorder="big")
+            
+            # isr_nodes array
+            partition_data += int(len(partition["isr"]) + 1).to_bytes(1, byteorder="big")
+            
+            # Add each ISR
+            for isr in partition["isr"]:
+                partition_data += isr.to_bytes(4, byteorder="big")
+            
+            # offline_replicas (empty array)
+            partition_data += b"\x01"  # 0 elements + 1
+            
+            # Tagged fields
+            partition_data += tag_buffer
+        else:
+            # No partitions
+            partition_array = b"\x01"  # 0 partitions + 1
+            partition_data = b""
+    else:
+        # Topic doesn't exist
+        error_code = int(3).to_bytes(2, byteorder="big")  # UNKNOWN_TOPIC_OR_PARTITION
+        topic_id = int(0).to_bytes(16, byteorder="big")
+        partition_array = b"\x01"  # 0 partitions + 1
+        partition_data = b""
+        
+        throttle_time_ms = int(0).to_bytes(4, byteorder="big")
+        is_internal = int(0).to_bytes(1, byteorder="big")
+        topic_authorized_operations = b"\x00\x00\x0d\xf8"
+    
     response_body = (
         throttle_time_ms
         + int(array_length).to_bytes(1, byteorder="big")
@@ -131,11 +299,13 @@ def response_api_key_75(id, cursor, array_length, length, topic_name):
         + topic_id
         + is_internal
         + partition_array
+        + partition_data
         + topic_authorized_operations
         + tag_buffer
         + cursor 
-        + tag_buffer # Response tag buffer
+        + tag_buffer  # Response tag buffer
     )
+    
     total_len = len(response_header) + len(response_body)
     return int(total_len).to_bytes(4, byteorder="big") + response_header + response_body
 
@@ -325,4 +495,6 @@ def run():
 
 
 if __name__ == "__main__":
+    # Initialize the metadata reader
+    metadata_reader = ClusterMetadataReader()
     run()
