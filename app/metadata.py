@@ -1,6 +1,6 @@
 import uuid
 from collections import defaultdict
-from.parser import ByteParser
+from .parser import ByteParser
 
 BASE_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
@@ -55,7 +55,7 @@ class Metadata:
     def separate_records(self, parser):
         records = []
         while not parser.eof():
-            length = parser.consume_svarint()
+            length = parser.consume_var_int()
             record = parser.consume(length)
             records.append(record)
         return records
@@ -63,12 +63,12 @@ class Metadata:
     def parse_record(self, batch):
         parser = ByteParser(batch)
         attribute = parser.consume(1)
-        timestamp_delta = parser.consume_svarint()
-        offset_delta = parser.consume_svarint()
-        key_length = parser.consume_svarint()
+        timestamp_delta = parser.consume_var_int()
+        offset_delta = parser.consume_var_int()
+        key_length = parser.consume_var_int()
         if key_length != -1:
             parser.read(1)
-        value_length = parser.consume_svarint()
+        value_length = parser.consume_var_int()
         value = parser.consume(value_length)
         self.parse_value(value)
 
@@ -84,7 +84,7 @@ class Metadata:
 
     def parse_topic(self, parser):
         version = parser.consume(1)
-        length_of_name = parser.consume_svarint(False) - 1
+        length_of_name = parser.consume_var_int(False) - 1
         topic_name = parser.consume(length_of_name)
         raw_uuid = parser.consume(16)
         self.topics[topic_name] = {"uuid": uuid.UUID(bytes=raw_uuid), "partitions": []}
@@ -93,15 +93,15 @@ class Metadata:
         version = parser.consume(1)
         partition_id = parser.consume(4)
         raw_uuid = parser.consume(16)
-        length_of_replica_array = parser.consume_svarint(False) - 1
-        replicas = self.digest_array(parser, parser.consume_svarint(False) - 1, 4)
-        in_sync = self.digest_array(parser, parser.consume_svarint(False) - 1, 4)
-        removing = self.digest_array(parser, parser.consume_svarint(False) - 1, 4)
-        adding = self.digest_array(parser, parser.consume_svarint(False) - 1, 4)
+        length_of_replica_array = parser.consume_var_int(False) - 1
+        replicas = self.digest_array(parser, parser.consume_var_int(False) - 1, 4)
+        in_sync = self.digest_array(parser, parser.consume_var_int(False) - 1, 4)
+        removing = self.digest_array(parser, parser.consume_var_int(False) - 1, 4)
+        adding = self.digest_array(parser, parser.consume_var_int(False) - 1, 4)
         leader = parser.consume(4)
         epoch = parser.consume(4)
         partition_epoch = parser.consume(4)
-        directories = self.digest_array(parser, parser.consume_svarint(False) - 1, 4)
+        directories = self.digest_array(parser, parser.consume_var_int(False) - 1, 4)
         if partition_id in self.partitions:
             self.partitions[partition_id]["topics"].append(uuid.UUID(bytes=raw_uuid))
         else:
