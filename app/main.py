@@ -7,8 +7,8 @@ ERRORS = {
     "ok": int(0).to_bytes(2, byteorder="big"),
     "error": int(35).to_bytes(2, byteorder="big"),
 }
-TAG_BUFFER = int(0).to_bytes(1)
-DEFAULT_THROTTLE_TIME = int(0).to_bytes(4)
+TAG_BUFFER = int(0).to_bytes(1, byteorder="big")
+DEFAULT_THROTTLE_TIME = int(0).to_bytes(4, byteorder="big")
 
 class BaseKafka(object):
     @staticmethod
@@ -255,6 +255,10 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         ret += struct.pack(">b", 1)
         # isr_nodes (empty array)
         ret += struct.pack(">b", 1)
+        # eligible_leader_replicas (empty array)
+        ret += struct.pack(">b", 1)
+        # last_known_elr (empty array)
+        ret += struct.pack(">b", 1)
         # offline_replicas (empty array)
         ret += struct.pack(">b", 1)
 
@@ -277,8 +281,8 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         if self.topics:
             body += self.create_topic_item(self.topics[0].encode("utf-8"))
 
-        # Add cursor
-        body += self.cursor
+        # Add cursor (null cursor)
+        body += struct.pack(">B", 0xFF)  # 0xFF indicates a null cursor
 
         # Tagged fields at end of response
         body += TAG_BUFFER
