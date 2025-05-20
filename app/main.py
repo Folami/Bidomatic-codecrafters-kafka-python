@@ -1,6 +1,7 @@
 import asyncio
 import socket  # noqa: F401
 import struct
+import sys
 from .metadata import Metadata
 
 ERRORS = {
@@ -314,13 +315,7 @@ def create_message(id, key, version_in_bytes):
 
 
 
-async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    metadata_log_path = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log"
-    with open(metadata_log_path, "rb") as f:
-        data = f.read()
-        m = Metadata(data)
-        f.close()
-    print(m.topics)
+async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     while True:
         data = await reader.read(1024)
         if not data:
@@ -329,24 +324,38 @@ async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         if header.key_int == 18:
             message = ApiRequest(header.version_int, header.id).message
         elif header.key_int == 75:  # DescribeTopicPartitions API
-            request = DescribeTopicPartitionsRequest(header.id, header.body, m)
+            request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
             message = request.message
         else:
-            request = TopicRequest(header.id, header.body, m)
+            request = TopicRequest(header.id, header.body, metadata)
             message = request.message
         writer.write(message)
         await writer.drain()
     writer.close()
     await writer.wait_closed()
 
+def run_server(metadata):
+    server = asyncio.run(asyncio.start_server(client_handler, metadata, "localhost", 9092, reuse_port=True))
+    print("Server listening...")
+    try:
+        asyncio.run(server.serve_forever())
+    except KeyboardInterrupt:
+        print("Server stopped.")
+        server.close()
+        asyncio.run(server.wait_closed())
+        print("Server closed.")
+        sys.exit(0)
+
 async def main():
     # You can use print statements as follows for debugging,
     # they'll be visible when running tests.
     print("Logs from your program will appear here!")
-    server = await asyncio.start_server(handler, "localhost", 9092)
-    print("Server listening...")
-    async with server:
-        await server.serve_forever()
-
+    metadata_log_path = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log"
+    with open(metadata_log_path, "rb") as f:
+        data = f.read()
+        metadata = Metadata(data)
+        f.close()
+    print(metadata.topics)
+    run_server(metadata)
 
 asyncio.run(main())
