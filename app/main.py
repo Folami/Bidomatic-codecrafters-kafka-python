@@ -334,17 +334,21 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
     writer.close()
     await writer.wait_closed()
 
-def run_server(metadata):
-    server = asyncio.run(asyncio.start_server(lambda r, w: client_handler(metadata, r, w), "localhost", 9092, reuse_port=True))
-    print("Server listening...")
-    try:
-        asyncio.run(server.serve_forever())
-    except KeyboardInterrupt:
-        print("Server stopped.")
-        server.close()
-        asyncio.run(server.wait_closed())
-        print("Server closed.")
-        sys.exit(0)
+async def run_server(metadata):
+    server = await asyncio.start_server( 
+        # Use await for start_server
+        lambda r, 
+        w: client_handler(metadata, r, w),
+        "localhost", 9092,
+        reuse_port=True
+    )
+    addr = server.sockets[0].getsockname() if server.sockets else ("unknown", 0)
+    print(f"Server listening on {addr[0]}:{addr[1]}...")
+    # Ensures server.close() and server.wait_closed() on exit or cancellation
+    async with server: 
+        # Use await for serve_forever
+        await server.serve_forever()
+
 
 async def main():
     # You can use print statements as follows for debugging,
@@ -356,6 +360,6 @@ async def main():
         metadata = Metadata(data)
         f.close()
     print(metadata.topics)
-    run_server(metadata)
+    await run_server(metadata) # Call run_server as a coroutine
 
 asyncio.run(main())
