@@ -172,14 +172,6 @@ class TopicRequest(BaseKafka):
         else:
             return ERRORS["error"]
 
-async def main():
-    # You can use print statements as follows for debugging,
-    # they'll be visible when running tests.
-    print("Logs from your program will appear here!")
-    server = await asyncio.start_server(handler, "localhost", 9092)
-    print("Server listening...")
-    async with server:
-        await server.serve_forever()
 
 class DescribeTopicPartitionsRequest(BaseKafka):
     def __init__(self, correlation_id, body, metadata):
@@ -288,34 +280,7 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         body += TAG_BUFFER
 
         return header + body
-
-async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-    with open(
-        "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log",
-        "rb",
-    ) as f:
-        data = f.read()
-        m = Metadata(data)
-        f.close()
-    print(m.topics)
-    while True:
-        data = await reader.read(1024)
-        if not data:
-            break
-        header = KafkaHeader(data)
-        if header.key_int == 18:
-            message = ApiRequest(header.version_int, header.id).message
-        elif header.key_int == 75:  # DescribeTopicPartitions API
-            request = DescribeTopicPartitionsRequest(header.id, header.body, m)
-            message = request.message
-        else:
-            request = TopicRequest(header.id, header.body, m)
-            message = request.message
-        writer.write(message)
-        await writer.drain()
-    writer.close()
-    await writer.wait_closed()
-
+    
 APIS = {18: [0, 4], 75: [0, 0]}
 def add_api_version(string, api_version, mini, maximum):
     string += api_version
@@ -346,6 +311,42 @@ def create_message(id, key, version_in_bytes):
     body += throttle_time_ms.to_bytes(4)
     response_length = len(id) + len(body)
     return int(response_length).to_bytes(4, byteorder="big") + id + body
+
+
+
+async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    metadata_log_path = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log"
+    with open(metadata_log_path, "rb") as f:
+        data = f.read()
+        m = Metadata(data)
+        f.close()
+    print(m.topics)
+    while True:
+        data = await reader.read(1024)
+        if not data:
+            break
+        header = KafkaHeader(data)
+        if header.key_int == 18:
+            message = ApiRequest(header.version_int, header.id).message
+        elif header.key_int == 75:  # DescribeTopicPartitions API
+            request = DescribeTopicPartitionsRequest(header.id, header.body, m)
+            message = request.message
+        else:
+            request = TopicRequest(header.id, header.body, m)
+            message = request.message
+        writer.write(message)
+        await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+async def main():
+    # You can use print statements as follows for debugging,
+    # they'll be visible when running tests.
+    print("Logs from your program will appear here!")
+    server = await asyncio.start_server(handler, "localhost", 9092)
+    print("Server listening...")
+    async with server:
+        await server.serve_forever()
 
 
 asyncio.run(main())
