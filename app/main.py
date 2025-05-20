@@ -259,9 +259,9 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         body = DEFAULT_THROTTLE_TIME  # throttle_time_ms: 0
         # Topics array (compact format)
         body += int(len(self.topics) + 1).to_bytes(1)  # Array length
-        # Add topic information
-        if self.topics:
-            body += self.create_topic_item(self.topics[0].encode("utf-8"))
+        # Add all topic information
+        for topic in self.topics:
+            body += self.create_topic_item(topic.encode("utf-8"))
         # Add cursor (null cursor)
         body += struct.pack(">B", 0xFF)  # 0xFF indicates a null cursor
         # Tagged fields at end of response
@@ -291,9 +291,9 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
     await writer.wait_closed()
 
 async def run_server(metadata, port, host):
-    server = await asyncio.start_server( 
+    server = await asyncio.start_server(
         # Use await for start_server
-        lambda r, 
+        lambda r,
         w: client_handler(metadata, r, w),
         host, port,
         reuse_port=True
@@ -301,7 +301,7 @@ async def run_server(metadata, port, host):
     addr = server.sockets[0].getsockname() if server.sockets else ("unknown", 0)
     print(f"Server listening on {addr[0]}:{addr[1]}...")
     # Ensures server.close() and server.wait_closed() on exit or cancellation
-    async with server: 
+    async with server:
         # Use await for serve_forever
         await server.serve_forever()
 
