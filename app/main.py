@@ -17,7 +17,6 @@ class BaseKafka(object):
         message_length = len(message)
         message_bytes = message_length.to_bytes(4, byteorder="big")
         return message_bytes + message
-        return int(len(message)).to_bytes(4, byteorder="big") + message
 
     @staticmethod
     def _remove_tag_buffer(buffer: bytes):
@@ -337,12 +336,12 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
     writer.close()
     await writer.wait_closed()
 
-async def run_server(metadata):
+async def run_server(metadata, port, host):
     server = await asyncio.start_server( 
         # Use await for start_server
         lambda r, 
         w: client_handler(metadata, r, w),
-        "localhost", 9092,
+        host, port,
         reuse_port=True
     )
     addr = server.sockets[0].getsockname() if server.sockets else ("unknown", 0)
@@ -354,6 +353,8 @@ async def run_server(metadata):
 
 
 async def main():
+    port = 9092
+    host = "localhost"
     # You can use print statements as follows for debugging,
     # they'll be visible when running tests.
     print("Logs from your program will appear here!")
@@ -363,6 +364,7 @@ async def main():
         metadata = Metadata(data)
         f.close()
     print(metadata.topics)
-    await run_server(metadata) # Call run_server as a coroutine
+    # Call run_server as a coroutine
+    await run_server(metadata, port, host)
 
 asyncio.run(main())
