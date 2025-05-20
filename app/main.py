@@ -14,6 +14,9 @@ DEFAULT_THROTTLE_TIME = int(0).to_bytes(4, byteorder="big")
 class BaseKafka(object):
     @staticmethod
     def _create_message(message: bytes):
+        message_length = len(message)
+        message_bytes = message_length.to_bytes(4, byteorder="big")
+        return message_bytes + message
         return int(len(message)).to_bytes(4, byteorder="big") + message
 
     @staticmethod
