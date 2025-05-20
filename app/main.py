@@ -14,8 +14,8 @@ DEFAULT_THROTTLE_TIME = int(0).to_bytes(4, byteorder="big")
 class BaseKafka(object):
     @staticmethod
     def _create_message(message: bytes):
-        message_length = len(message)
-        message_bytes = message_length.to_bytes(4, byteorder="big")
+        message_size = len(message)
+        message_bytes = message_size.to_bytes(4, byteorder="big")
         return message_bytes + message
 
     @staticmethod
@@ -90,13 +90,13 @@ class TopicRequest(BaseKafka):
         buffer = self._parse_array(body, self.parse_topics)
         self.limit = buffer[0:4]
         self.cursor = buffer[4:5]
-        buffer = self._remove_tag_buffer(buffer)
         self.available_topics = metadata.topics
         self.partitions = metadata.partitions
         self.message = self._create_message(self.construct_message())
 
     def parse_topics(self, item_buffer):
-        self.topics.append(item_buffer.decode("utf-8"))
+        decoded_topic = item_buffer.decode("utf-8")
+        self.topics.append(decoded_topic)
 
     def add_api_version(self, string, api_version, mini, maximum):
         string += api_version
@@ -199,11 +199,9 @@ class DescribeTopicPartitionsRequest(BaseKafka):
             topic_buffer += struct.pack(">h", 0)  # Success
         else:
             topic_buffer += struct.pack(">h", 3)  # UNKNOWN_TOPIC_OR_PARTITION
-
         # string length and topic name
         topic_buffer += struct.pack(">b", len(topic) + 1)  # Compact string length
         topic_buffer += struct.pack(f">{len(topic)}s", topic)  # Topic name
-
         # topic id (UUID)
         if available:
             uuid_str = self.available_topics[topic]["uuid"]
@@ -211,12 +209,9 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         else:
             # Use all zeros for unknown topics
             uuid_bytes = bytes(16)
-
         topic_buffer += struct.pack("16s", uuid_bytes)
-
         # is_internal flag (false)
         topic_buffer += struct.pack(">b", 0)
-
         # partitions array
         if available and self.available_topics[topic]["partitions"]:
             # Add 1 for compact array format
@@ -226,13 +221,10 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         else:
             # Empty array (just the length byte)
             topic_buffer += struct.pack(">b", 1)
-
         # topic_authorized_operations
         topic_buffer += struct.pack(">I", 0x00000DF8)
-
         # tag buffer
         topic_buffer += struct.pack(">b", 0)
-
         return topic_buffer
 
     def add_partition(self, partition):
@@ -245,7 +237,6 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         ret += struct.pack(">I", int.from_bytes(partition["leader"]))
         # leader_epoch
         ret += struct.pack(">I", int.from_bytes(partition["leader_epoch"]))
-
         # replica_nodes (empty array)
         ret += struct.pack(">b", 1)
         # isr_nodes (empty array)
@@ -256,7 +247,6 @@ class DescribeTopicPartitionsRequest(BaseKafka):
         ret += struct.pack(">b", 1)
         # offline_replicas (empty array)
         ret += struct.pack(">b", 1)
-
         # tagged fields
         ret += struct.pack(">b", 0)
 
@@ -265,56 +255,19 @@ class DescribeTopicPartitionsRequest(BaseKafka):
     def construct_message(self):
         header = self.id
         header += TAG_BUFFER  # Tagged fields in header
-
         # Response body
         body = DEFAULT_THROTTLE_TIME  # throttle_time_ms: 0
-
         # Topics array (compact format)
         body += int(len(self.topics) + 1).to_bytes(1)  # Array length
-
         # Add topic information
         if self.topics:
             body += self.create_topic_item(self.topics[0].encode("utf-8"))
-
         # Add cursor (null cursor)
         body += struct.pack(">B", 0xFF)  # 0xFF indicates a null cursor
-
         # Tagged fields at end of response
         body += TAG_BUFFER
 
         return header + body
-    
-APIS = {18: [0, 4], 75: [0, 0]}
-def add_api_version(string, api_version, mini, maximum):
-    string += api_version
-    string += int(mini).to_bytes(2)
-    string += int(maximum).to_bytes(2)
-    return string
-
-def create_message(id, key, version_in_bytes):
-    tag_buffer = b"\x00"
-    throttle_time_ms = 0
-    version = int.from_bytes(version_in_bytes, byteorder="big")
-    ok = int(0).to_bytes(2, byteorder="big")
-    error = int(35).to_bytes(2, byteorder="big")
-    body = ""
-    if 0 <= version <= 4:
-        body = ok
-    else:
-        body = error
-    apis = b""
-    apis += struct.pack(">b", 3)
-    apis += struct.pack(">hhhb", 18, 4, 18, 0)
-    apis += struct.pack(">hhhb", 75, 0, 0, 0)
-    # apis = add_api_version(bytes(), key, 4, 18)
-    # apis = add_api_version(apis, int(75).to_bytes(2), 0, 0)
-    # body += int(3).to_bytes(2, byteorder="big")
-    body += apis
-    body += tag_buffer
-    body += throttle_time_ms.to_bytes(4)
-    response_length = len(id) + len(body)
-    return int(response_length).to_bytes(4, byteorder="big") + id + body
-
 
 
 async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -324,7 +277,8 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:
-            message = ApiRequest(header.version_int, header.id).message
+            request = ApiRequest(header.version_int, header.id)
+            message = request.message
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
             message = request.message
@@ -355,7 +309,7 @@ async def run_server(metadata, port, host):
 async def main():
     port = 9092
     host = "localhost"
-    # You can use print statements as follows for debugging,
+    # Use print statements as follows for debugging,
     # they'll be visible when running tests.
     print("Logs from your program will appear here!")
     metadata_log_path = "/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log"
