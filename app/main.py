@@ -335,7 +335,7 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
     await writer.wait_closed()
 
 def run_server(metadata):
-    server = asyncio.run(asyncio.start_server(client_handler, metadata, "localhost", 9092, reuse_port=True))
+    server = asyncio.run(asyncio.start_server(lambda r, w: client_handler(metadata, r, w), "localhost", 9092, reuse_port=True))
     print("Server listening...")
     try:
         asyncio.run(server.serve_forever())
