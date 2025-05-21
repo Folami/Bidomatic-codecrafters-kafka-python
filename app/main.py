@@ -4,12 +4,13 @@ import struct
 import sys
 from .metadata import Metadata
 
+
+TAG_BUFFER = int(0).to_bytes(1, byteorder="big")
+DEFAULT_THROTTLE_TIME = int(0).to_bytes(4, byteorder="big")
 ERRORS = {
     "ok": int(0).to_bytes(2, byteorder="big"),
     "error": int(35).to_bytes(2, byteorder="big"),
 }
-TAG_BUFFER = int(0).to_bytes(1, byteorder="big")
-DEFAULT_THROTTLE_TIME = int(0).to_bytes(4, byteorder="big")
 
 class BaseKafka(object):
     @staticmethod
@@ -26,7 +27,8 @@ class BaseKafka(object):
     def _parse_string(buffer: bytes):
         length = int.from_bytes(buffer[:2], byteorder="big")
         string = buffer[2 : 2 + length].decode("utf-8")
-        return (string, buffer[2 + length :])
+        string_parse_result = (string, buffer[2 + length :])
+        return string_parse_result
 
     @staticmethod
     def _parse_array(buffer: bytes, func):
@@ -69,12 +71,13 @@ class ApiRequest(BaseKafka):
         body += self.error_handler()
         apis = b""
         apis += struct.pack(">b", 3)
-        apis += struct.pack(">hhhb", 18, 4, 18, 0)
-        apis += struct.pack(">hhhb", 75, 0, 0, 0)
+        apis += struct.pack(">hhhb", 18, 0, 4, 0)  # ApiVersions
+        apis += struct.pack(">hhhb", 1, 0, 16, 0)  # Fetch
+        apis += struct.pack(">hhhb", 75, 0, 0, 0)  # DescribeTopicPartitions
         body += apis
         body += struct.pack(">Ib", 4, 0)
         return body
-
+    
     def error_handler(self):
         if 0 <= self.version_int <= 4:
             return ERRORS["ok"]
