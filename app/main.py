@@ -75,7 +75,7 @@ class ApiRequest(BaseKafka):
         apis += struct.pack(">hhhb", 1, 0, 16, 0)  # Fetch
         apis += struct.pack(">hhhb", 75, 0, 0, 0)  # DescribeTopicPartitions
         body += apis
-        body += struct.pack(">Ib", 4, 0)
+        body += struct.pack(">ib", 0, 0)
         return body
     
     def error_handler(self):
