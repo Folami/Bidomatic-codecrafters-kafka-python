@@ -71,12 +71,13 @@ class ApiRequest(BaseKafka):
         body += self.error_handler()
         apis = b""
         apis += struct.pack(">b", 3)  # Compact array length (3 entries)
-        apis += struct.pack(">hhh", 18, 0, 4)  # ApiVersions
-        apis += struct.pack(">hhh", 1, 0, 16)  # Fetch
-        apis += struct.pack(">hhh", 75, 0, 0)  # DescribeTopicPartitions
+        apis += struct.pack(">hhhb", 18, 0, 4, 0)  # ApiVersions
+        apis += struct.pack(">hhhb", 1, 0, 16, 0)  # Fetch
+        apis += struct.pack(">hhhb", 75, 0, 0, 0)  # DescribeTopicPartitions
         body += apis
         body += struct.pack(">ib", 0, 0)
         return body
+
     
     def error_handler(self):
         if 0 <= self.version_int <= 4:
