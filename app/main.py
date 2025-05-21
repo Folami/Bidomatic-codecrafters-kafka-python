@@ -70,10 +70,10 @@ class ApiRequest(BaseKafka):
         body = self.id
         body += self.error_handler()
         apis = b""
-        apis += struct.pack(">b", 3)  # Compact array length (3 entries)
-        apis += struct.pack(">hhhb", 18, 0, 4, 0)  # ApiVersions
-        apis += struct.pack(">hhhb", 1, 0, 16, 0)  # Fetch
-        apis += struct.pack(">hhhb", 75, 0, 0, 0)  # DescribeTopicPartitions
+        apis += struct.pack(">b", 3)    # Compact array length (3 entries)
+        apis += struct.pack(">hhhh", 18, 0, 4, 0)  # ApiVersions
+        apis += struct.pack(">hhhh", 1, 0, 16, 0)  # Fetch
+        apis += struct.pack(">hhhh", 75, 0, 0, 0)  # DescribeTopicPartitions
         body += apis
         body += struct.pack(">ib", 0, 0)
         return body
