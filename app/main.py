@@ -67,16 +67,16 @@ class ApiRequest(BaseKafka):
         return string
 
     def construct_message(self):
-        body = self.id
-        body += self.error_handler()
+        body = self.error_handler()
         apis = b""
-        apis += struct.pack(">b", 3)    # Compact array length (3 entries)
+        apis += struct.pack(">b", 3)  # Compact array length (3 entries)
         apis += struct.pack(">hhhh", 18, 0, 4, 0)  # ApiVersions
         apis += struct.pack(">hhhh", 1, 0, 16, 0)  # Fetch
         apis += struct.pack(">hhhh", 75, 0, 0, 0)  # DescribeTopicPartitions
         body += apis
         body += struct.pack(">ib", 0, 0)
         return body
+
 
     
     def error_handler(self):
@@ -282,17 +282,24 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
         header = KafkaHeader(data)
         if header.key_int == 18:
             request = ApiRequest(header.version_int, header.id)
-            message = request.message
+            body = request.message  # Get only the body
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
-            message = request.message
+            body = request.message
         else:
             request = TopicRequest(header.id, header.body, metadata)
-            message = request.message
-        writer.write(message)
+            body = request.message
+
+        # Prepend the header and the length of the body
+        length = len(body)
+        length_prefix = length.to_bytes(4, byteorder="big")
+        response = header.id + struct.pack(">b", 0) + body #The header also includes correlation ID and tag buffer
+        response = length_prefix + response
+        writer.write(response)
         await writer.drain()
     writer.close()
     await writer.wait_closed()
+
 
 async def run_server(metadata, port, host):
     server = await asyncio.start_server(
