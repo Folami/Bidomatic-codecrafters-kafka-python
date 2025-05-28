@@ -67,29 +67,35 @@ class ApiRequest(BaseKafka):
         return string
 
     def construct_message(self):
-        body = b""
-        # ErrorCode (INT16) - 2 bytes (00 00)
-        body += self.error_handler()
-
-        # NumApiKeys (Compact Uvarint) - Must be 2 (02) to pass the test. 1 byte.
-        body += struct.pack(">b", 2)
-
-        # ApiKeys ([]ApiVersion) - Match hex dump bytes 17-35 (19 bytes).
-        apis_array_content = b""
-        # ApiVersion 1: ApiKey (2) + MinVersion (2) + MaxVersion (2) + TaggedFields (CompactArray, 0 fields -> 1 byte 00) = 7 bytes
-        apis_array_content += struct.pack(">hhh", 18, 0, 4) + struct.pack(">b", 0)  # ApiVersions
-        # ApiVersion 2: ApiKey (2) + MinVersion (2) + MaxVersion (2) + TaggedFields (CompactArray, 0 fields -> 1 byte 00) = 7 bytes
-        apis_array_content += struct.pack(">hhh", 1, 0, 16) + struct.pack(">b", 0)  # Fetch
-
-        body += apis_array_content  # Append the ApiKeys array content
-
-        # ThrottleTimeMs (INT32) - Match hex dump bytes 12-15 (1769472). 4 bytes.
-        body += struct.pack(">i", 1769472)
-
-        # Tagged fields (CompactArray, 0 fields -> 1 byte 00)
+        # Create response header with correlation ID
+        header = self.id
+        header += TAG_BUFFER
+        
+        # Create response body
+        body = self.error_handler()
+        
+        # NumApiKeys (Compact Uvarint) - 1 byte for array length
+        body += struct.pack(">b", 3)  # 3-1=2 elements in compact format
+        
+        # ApiVersions entry
+        body += struct.pack(">h", 18)  # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 4)   # MaxVersion
+        body += struct.pack(">b", 0)   # TaggedFields
+        
+        # Fetch entry
+        body += struct.pack(">h", 1)   # ApiKey for Fetch
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 16)  # MaxVersion
+        body += struct.pack(">b", 0)   # TaggedFields
+        
+        # ThrottleTimeMs
+        body += struct.pack(">I", 0)   # Use 0 instead of 1769472
+        
+        # Tagged fields
         body += struct.pack(">b", 0)
-
-        return body
+        
+        return header + body
 
     
     def error_handler(self):
