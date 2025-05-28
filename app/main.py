@@ -67,23 +67,33 @@ class ApiRequest(BaseKafka):
         return string
 
     def construct_message(self):
+        # Start with correlation ID
         body = self.id
-        body += self.error_handler()
         
-        # API keys array
-        apis = b""
-        apis += struct.pack(">b", 3)  # Compact array format: 3-1=2 elements
+        # Add error code (0 = success)
+        body += struct.pack(">h", 0)
         
-        # ApiVersions entry (key 18)
-        apis += struct.pack(">hhhb", 18, 0, 4, 0)  # ApiKey, MinVersion, MaxVersion, TaggedFields
+        # API keys array - using compact format
+        # First byte is array length in compact format (actual length + 1)
+        body += struct.pack(">b", 3)  # 3-1=2 elements
         
-        # Fetch entry (key 1)
-        apis += struct.pack(">hhhb", 1, 0, 16, 0)  # ApiKey, MinVersion, MaxVersion, TaggedFields
+        # First API key entry: ApiVersions (18)
+        body += struct.pack(">h", 18)  # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 4)   # MaxVersion
+        body += struct.pack(">b", 0)   # Tagged fields (empty)
         
-        body += apis
+        # Second API key entry: Fetch (1)
+        body += struct.pack(">h", 1)   # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 16)  # MaxVersion
+        body += struct.pack(">b", 0)   # Tagged fields (empty)
         
-        # ThrottleTimeMs and TaggedFields
-        body += struct.pack(">Ib", 0, 0)  # ThrottleTimeMs=0, TaggedFields=0
+        # Throttle time (4 bytes)
+        body += struct.pack(">I", 0)
+        
+        # Tagged fields at end (empty)
+        body += struct.pack(">b", 0)
         
         return body
 
