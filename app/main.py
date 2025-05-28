@@ -67,35 +67,25 @@ class ApiRequest(BaseKafka):
         return string
 
     def construct_message(self):
-        # Create response header with correlation ID
-        header = self.id
-        header += TAG_BUFFER
+        body = self.id
+        body += self.error_handler()
         
-        # Create response body
-        body = self.error_handler()
+        # API keys array
+        apis = b""
+        apis += struct.pack(">b", 3)  # Compact array format: 3-1=2 elements
         
-        # NumApiKeys (Compact Uvarint) - 1 byte for array length
-        body += struct.pack(">b", 3)  # 3-1=2 elements in compact format
+        # ApiVersions entry (key 18)
+        apis += struct.pack(">hhhb", 18, 0, 4, 0)  # ApiKey, MinVersion, MaxVersion, TaggedFields
         
-        # ApiVersions entry
-        body += struct.pack(">h", 18)  # ApiKey
-        body += struct.pack(">h", 0)   # MinVersion
-        body += struct.pack(">h", 4)   # MaxVersion
-        body += struct.pack(">b", 0)   # TaggedFields
+        # Fetch entry (key 1)
+        apis += struct.pack(">hhhb", 1, 0, 16, 0)  # ApiKey, MinVersion, MaxVersion, TaggedFields
         
-        # Fetch entry
-        body += struct.pack(">h", 1)   # ApiKey for Fetch
-        body += struct.pack(">h", 0)   # MinVersion
-        body += struct.pack(">h", 16)  # MaxVersion
-        body += struct.pack(">b", 0)   # TaggedFields
+        body += apis
         
-        # ThrottleTimeMs
-        body += struct.pack(">I", 0)   # Use 0 instead of 1769472
+        # ThrottleTimeMs and TaggedFields
+        body += struct.pack(">Ib", 0, 0)  # ThrottleTimeMs=0, TaggedFields=0
         
-        # Tagged fields
-        body += struct.pack(">b", 0)
-        
-        return header + body
+        return body
 
     
     def error_handler(self):
