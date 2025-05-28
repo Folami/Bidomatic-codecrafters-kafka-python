@@ -58,13 +58,6 @@ class ApiRequest(BaseKafka):
     def __init__(self, version_int: int, id: bytes):
         self.version_int = version_int
         self.id = id
-        self.message = self._create_message(self.construct_message())
-
-    def add_api_version(self, string, api_version, mini, maximum):
-        string += api_version
-        string += int(mini).to_bytes(2)
-        string += int(maximum).to_bytes(2)
-        return string
 
     def construct_message(self):
         body = b""
@@ -83,7 +76,7 @@ class ApiRequest(BaseKafka):
         body += struct.pack(">hhh", 75, 0, 0) + TAG_BUFFER
 
         # Throttle time (INT32)
-        body += struct.pack(">i", 0) # Use >i for signed int32, as per standard
+        body += struct.pack(">i", 0) 
         # Tagged fields at end of response body (BYTE)
         body += TAG_BUFFER # This is b'\x00'
 
@@ -92,7 +85,7 @@ class ApiRequest(BaseKafka):
     
     def error_handler(self):
         if 0 <= self.version_int <= 4:
-            return ERRORS["ok"]
+            return ERRORS["ok"] 
         else:
             return ERRORS["error"]
 
@@ -292,42 +285,16 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            # Create a new ApiVersionsResponse that includes Fetch and DescribeTopicPartitions APIs
-            api_versions_response = b""
-            # Add correlation ID from request
-            api_versions_response += header.id
-            # Add error code (0 = success)
-            api_versions_response += struct.pack(">h", 0)
-            # API keys array (compact format; count = number of keys + 1)
-            # Now include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
-            api_versions_response += struct.pack(">b", 4)
+            api_request_handler = ApiRequest(header.version_int, header.id)
+            response_body = api_request_handler.construct_message()
 
-            # ApiVersions entry
-            api_versions_response += struct.pack(">h", 18)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 4)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Fetch entry
-            api_versions_response += struct.pack(">h", 1)   # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 16)  # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # DescribeTopicPartitions entry
-            api_versions_response += struct.pack(">h", 75)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 0)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Throttle time (4 bytes)
-            api_versions_response += struct.pack(">I", 0)
-
-            # Tagged fields at end
-            api_versions_response += struct.pack(">b", 0)
-
-            # Create message with length prefix
-            message = BaseKafka._create_message(api_versions_response)
+            # Construct the full response content to be prefixed with length:
+            # Correlation ID (4 bytes) + Header Tag Buffer (1 byte) + Response Body
+            full_response_content = header.id 
+            full_response_content += TAG_BUFFER # Header's TaggedFields (Uvarint, 0 means no tagged fields)
+            full_response_content += response_body
+            
+            message = BaseKafka._create_message(full_response_content)
             writer.write(message)
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
