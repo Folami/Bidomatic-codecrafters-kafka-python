@@ -70,16 +70,38 @@ class ApiRequest(BaseKafka):
         body = b""
         # Start with correlation ID
         body += self.id
+
         # Add error code (0 = success)
         body += struct.pack(">h", 0)
+
         # API keys array - using compact format
         # First byte is array length in compact format (actual length + 1)
-        body += struct.pack(">b", 4) # Compact array length for 3 entries (ApiVersions, Fetch, DescribeTopicPartitions)
-        body += struct.pack(">hhhh", 18, 0, 4, 0)    # ApiVersions (key, min, max, tag_buffer)
-        body += struct.pack(">hhhh", 1, 0, 16, 0)   # Fetch (key, min, max, tag_buffer)
-        body += struct.pack(">hhhh", 75, 0, 0, 0)   # DescribeTopicPartitions (key, min, max, tag_buffer)
-        body += struct.pack(">i", 0)             # throttle_time_ms (INT32)
-        body += struct.pack(">b", 0)             # tag_buffer (BYTE) for the response body
+        body += struct.pack(">b", 5)  # 5-1=4 elements
+
+        # First API key entry: ApiVersions (18)
+        body += struct.pack(">h", 18)  # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 4)   # MaxVersion
+        body += struct.pack(">b", 0)   # Tagged fields (empty)
+
+        # Second API key entry: Fetch (1)
+        body += struct.pack(">h", 1)   # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 16)  # MaxVersion
+        body += struct.pack(">b", 0)   # Tagged fields (empty)
+
+        # Third API key entry: DescribeTopicPartitions (75)
+        body += struct.pack(">h", 75)  # ApiKey
+        body += struct.pack(">h", 0)   # MinVersion
+        body += struct.pack(">h", 0)   # MaxVersion
+        body += struct.pack(">b", 0)   # Tagged fields (empty)
+
+        # Throttle time (4 bytes)
+        body += struct.pack(">I", 0)
+
+        # Tagged fields at end (empty)
+        body += struct.pack(">b", 0)
+
         return body
 
     
@@ -285,8 +307,35 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            request = ApiRequest(header.version_int, header.id)
-            message = request.message # This already includes the length prefix from _create_message
+            # Create a new ApiVersionsResponse that includes Fetch API
+            api_versions_response = b""
+            # Add correlation ID from request
+            api_versions_response += header.id
+            # Add error code (0 = success)
+            api_versions_response += struct.pack(">h", 0)
+            # API keys array (compact format)
+            api_versions_response += struct.pack(">b", 3)  # 3-1=2 elements
+            
+            # ApiVersions entry
+            api_versions_response += struct.pack(">h", 18)  # ApiKey
+            api_versions_response += struct.pack(">h", 0)   # MinVersion
+            api_versions_response += struct.pack(">h", 4)   # MaxVersion
+            api_versions_response += struct.pack(">b", 0)   # Tagged fields
+            
+            # Fetch entry
+            api_versions_response += struct.pack(">h", 1)   # ApiKey
+            api_versions_response += struct.pack(">h", 0)   # MinVersion
+            api_versions_response += struct.pack(">h", 16)  # MaxVersion
+            api_versions_response += struct.pack(">b", 0)   # Tagged fields
+            
+            # Throttle time
+            api_versions_response += struct.pack(">I", 0)
+            
+            # Tagged fields at end
+            api_versions_response += struct.pack(">b", 0)
+            
+            # Create message with length prefix
+            message = BaseKafka._create_message(api_versions_response)
             writer.write(message)
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
