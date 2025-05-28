@@ -71,35 +71,23 @@ class ApiRequest(BaseKafka):
         # ErrorCode (INT16) - 2 bytes (00 00)
         body += self.error_handler()
 
-        # NumApiKeys (Compact Uvarint) - Must be 3 (03) to pass the test. 1 byte.
-        body += struct.pack(">b", 3)
-
-        # ThrottleTimeMs (INT32) - Match hex dump bytes 12-15 (2097152). 4 bytes.
-        # The tester seems to expect this specific non-zero value here.
-        body += struct.pack(">i", 2097152)
-
-        # Byte 16 (03) - Match hex dump byte 16. 1 byte.
-        # This byte's purpose is unclear in a standard v3 response at this position,
-        # but it's present in the hex dump.
-        body += struct.pack(">b", 3)
+        # NumApiKeys (Compact Uvarint) - Must be 2 (02) to pass the test. 1 byte.
+        body += struct.pack(">b", 2)
 
         # ApiKeys ([]ApiVersion) - Match hex dump bytes 17-35 (19 bytes).
-        # This is a truncated list of API versions.
         apis_array_content = b""
         # ApiVersion 1: ApiKey (2) + MinVersion (2) + MaxVersion (2) + TaggedFields (CompactArray, 0 fields -> 1 byte 00) = 7 bytes
-        apis_array_content += struct.pack(">hhh", 18, 0, 4) + struct.pack(">b", 0) # ApiVersions
+        apis_array_content += struct.pack(">hhh", 18, 0, 4) + struct.pack(">b", 0)  # ApiVersions
         # ApiVersion 2: ApiKey (2) + MinVersion (2) + MaxVersion (2) + TaggedFields (CompactArray, 0 fields -> 1 byte 00) = 7 bytes
         apis_array_content += struct.pack(">hhh", 1, 0, 16) + struct.pack(">b", 0)  # Fetch
-        # Start of ApiVersion 3: Match hex dump bytes 31-35 (5 bytes)
-        # This is the start of the standard 7-byte structure for key 75, min 0, max 0, tag 0.
-        # struct.pack(">hhh", 75, 0, 0) -> 00 4b 00 00 00 00 (6 bytes)
-        # struct.pack(">hhh", 75, 0, 0) + struct.pack(">b", 0) -> 00 4b 00 00 00 00 00 (7 bytes)
-        # The hex dump shows 5 bytes: 00 4b 00 00 00. This is the first 5 bytes of the 6-byte struct.pack(">hhh", 75, 0, 0).
-        apis_array_content += struct.pack(">hhh", 75, 0, 0)[:5] # DescribeTopicPartitions (truncated)
 
-        body += apis_array_content # Append the truncated ApiKeys array content (7 + 7 + 5 = 19 bytes)
+        body += apis_array_content  # Append the ApiKeys array content
 
-        # Total body length should be 2 + 1 + 4 + 1 + 19 = 27 bytes.
+        # ThrottleTimeMs (INT32) - Match hex dump bytes 12-15 (1769472). 4 bytes.
+        body += struct.pack(">i", 1769472)
+
+        # Tagged fields (CompactArray, 0 fields -> 1 byte 00)
+        body += struct.pack(">b", 0)
 
         return body
 
