@@ -307,33 +307,40 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            # Create a new ApiVersionsResponse that includes Fetch API
+            # Create a new ApiVersionsResponse that includes Fetch and DescribeTopicPartitions APIs
             api_versions_response = b""
             # Add correlation ID from request
             api_versions_response += header.id
             # Add error code (0 = success)
             api_versions_response += struct.pack(">h", 0)
-            # API keys array (compact format)
-            api_versions_response += struct.pack(">b", 3)  # 3-1=2 elements
-            
+            # API keys array (compact format; count = number of keys + 1)
+            # Now include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
+            api_versions_response += struct.pack(">b", 4)
+
             # ApiVersions entry
             api_versions_response += struct.pack(">h", 18)  # ApiKey
             api_versions_response += struct.pack(">h", 0)   # MinVersion
             api_versions_response += struct.pack(">h", 4)   # MaxVersion
             api_versions_response += struct.pack(">b", 0)   # Tagged fields
-            
+
             # Fetch entry
             api_versions_response += struct.pack(">h", 1)   # ApiKey
             api_versions_response += struct.pack(">h", 0)   # MinVersion
             api_versions_response += struct.pack(">h", 16)  # MaxVersion
             api_versions_response += struct.pack(">b", 0)   # Tagged fields
-            
-            # Throttle time
+
+            # DescribeTopicPartitions entry
+            api_versions_response += struct.pack(">h", 75)  # ApiKey
+            api_versions_response += struct.pack(">h", 0)   # MinVersion
+            api_versions_response += struct.pack(">h", 0)   # MaxVersion
+            api_versions_response += struct.pack(">b", 0)   # Tagged fields
+
+            # Throttle time (4 bytes)
             api_versions_response += struct.pack(">I", 0)
-            
+
             # Tagged fields at end
             api_versions_response += struct.pack(">b", 0)
-            
+
             # Create message with length prefix
             message = BaseKafka._create_message(api_versions_response)
             writer.write(message)
