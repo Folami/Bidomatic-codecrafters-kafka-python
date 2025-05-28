@@ -68,36 +68,24 @@ class ApiRequest(BaseKafka):
 
     def construct_message(self):
         body = b""
-        # Response body starts with ErrorCode
+        # The first part of the response *body* is the ErrorCode
         body += self.error_handler()
 
         # API keys array - using compact format
-        # First byte is array length in compact format (actual length + 1)
-        body += struct.pack(">b", 5)  # 5-1=4 elements
+        # ApiVersions, Fetch, DescribeTopicPartitions = 3 entries. Compact length = 3+1 = 4.
+        body += struct.pack(">b", 4)
 
-        # First API key entry: ApiVersions (18)
-        body += struct.pack(">h", 18)  # ApiKey
-        body += struct.pack(">h", 0)   # MinVersion
-        body += struct.pack(">h", 4)   # MaxVersion
-        body += struct.pack(">b", 0)   # Tagged fields (empty)
+        # ApiVersions entry (key 18, min 0, max 4) + TagBuffer (0)
+        body += struct.pack(">hhh", 18, 0, 4) + TAG_BUFFER
+        # Fetch entry (key 1, min 0, max 16) + TagBuffer (0)
+        body += struct.pack(">hhh", 1, 0, 16) + TAG_BUFFER
+        # DescribeTopicPartitions entry (key 75, min 0, max 0) + TagBuffer (0)
+        body += struct.pack(">hhh", 75, 0, 0) + TAG_BUFFER
 
-        # Second API key entry: Fetch (1)
-        body += struct.pack(">h", 1)   # ApiKey
-        body += struct.pack(">h", 0)   # MinVersion
-        body += struct.pack(">h", 16)  # MaxVersion
-        body += struct.pack(">b", 0)   # Tagged fields (empty)
-
-        # Third API key entry: DescribeTopicPartitions (75)
-        body += struct.pack(">h", 75)  # ApiKey
-        body += struct.pack(">h", 0)   # MinVersion
-        body += struct.pack(">h", 0)   # MaxVersion
-        body += struct.pack(">b", 0)   # Tagged fields (empty)
-
-        # Throttle time (4 bytes)
-        body += struct.pack(">I", 0)
-
-        # Tagged fields at end (empty)
-        body += struct.pack(">b", 0)
+        # Throttle time (INT32)
+        body += struct.pack(">i", 0) # Use >i for signed int32, as per standard
+        # Tagged fields at end of response body (BYTE)
+        body += TAG_BUFFER # This is b'\x00'
 
         return body
 
