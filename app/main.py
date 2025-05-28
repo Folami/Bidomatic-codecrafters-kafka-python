@@ -77,9 +77,10 @@ class ApiRequest(BaseKafka):
         # DescribeTopicPartitions entry (key 75, min 0, max 0)
         body += struct.pack(">hhh", 75, 0, 0) + TAG_BUFFER
 
-        # NOTE: To match the #GS0 passing hex dump (total length 33 bytes),
-        # ThrottleTimeMs (INT32) and the final ResponseBody TagBuffer (BYTE)
-        # are omitted here. The decoder for #GS0 seems to infer them as zero.
+        # Throttle time (INT32)
+        body += struct.pack(">i", 0) 
+        # Tagged fields at end of response body (BYTE)
+        body += TAG_BUFFER # This is b'\x00'
 
         return body
 
@@ -88,7 +89,7 @@ class ApiRequest(BaseKafka):
         # This method determines the error code based on the requested API version.
         # It's called at the beginning of construct_message().
         if 0 <= self.version_int <= 4:
-            return ERRORS["ok"] 
+            return ERRORS["ok"]
         else:
             return ERRORS["error"]
 
