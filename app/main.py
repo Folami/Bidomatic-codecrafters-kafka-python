@@ -76,7 +76,7 @@ class ApiRequest(BaseKafka):
 
         # API keys array - using compact format
         # First byte is array length in compact format (actual length + 1)
-        body += struct.pack(">b", 4)  # 4-1=3 elements
+        body += struct.pack(">b", 5)  # 5-1=4 elements
 
         # First API key entry: ApiVersions (18)
         body += struct.pack(">h", 18)  # ApiKey
