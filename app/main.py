@@ -293,46 +293,8 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            api_versions_response = b""
-            # Add correlation ID from request
-            api_versions_response += header.id
-            # Set error code based on the request API version:
-            # If version is within 0 to 4, return OK (0), else return error (35)
-            if 0 <= header.version_int <= 4:
-                api_versions_response += ERRORS["ok"]
-            else:
-                api_versions_response += ERRORS["error"]
-            # API keys array (compact format; count = number of keys + 1)
-            # Include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
-            api_versions_response += struct.pack(">b", 4)
-
-            # ApiVersions entry
-            api_versions_response += struct.pack(">h", 18)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 4)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Fetch entry
-            api_versions_response += struct.pack(">h", 1)   # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 16)  # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # DescribeTopicPartitions entry
-            api_versions_response += struct.pack(">h", 75)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 0)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Throttle time (4 bytes)
-            api_versions_response += struct.pack(">I", 0)
-
-            # Tagged fields at end
-            api_versions_response += struct.pack(">b", 0)
-
-            # Create message with length prefix
-            message = BaseKafka._create_message(api_versions_response)
-            writer.write(message)
+            request = ApiRequest(header.version_int, header.id)
+            message = request.message # request.message is already the full message with length prefix
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
             message = request.message
