@@ -292,14 +292,17 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            # Create a new ApiVersionsResponse that includes Fetch and DescribeTopicPartitions APIs
             api_versions_response = b""
             # Add correlation ID from request
             api_versions_response += header.id
-            # Add error code (0 = success)
-            api_versions_response += struct.pack(">h", 0)
+            # Set error code based on the request API version:
+            # If version is within 0 to 4, return OK (0), else return error (35)
+            if 0 <= header.version_int <= 4:
+                api_versions_response += ERRORS["ok"]
+            else:
+                api_versions_response += ERRORS["error"]
             # API keys array (compact format; count = number of keys + 1)
-            # Now include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
+            # Include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
             api_versions_response += struct.pack(">b", 4)
 
             # ApiVersions entry
