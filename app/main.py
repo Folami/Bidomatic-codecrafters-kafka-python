@@ -69,19 +69,16 @@ class ApiRequest(BaseKafka):
         payload += struct.pack(">h", 0)   
         payload += struct.pack(">h", 4)   
         payload += struct.pack(">b", 0)   # Tagged fields
-
         # Fetch entry (key 1, min 0, max 16)
         payload += struct.pack(">h", 1)   
         payload += struct.pack(">h", 0)   
         payload += struct.pack(">h", 16)  
         payload += struct.pack(">b", 0)   
-
         # DescribeTopicPartitions entry (key 75, min 0, max 0)
         payload += struct.pack(">h", 75)  
         payload += struct.pack(">h", 0)   
         payload += struct.pack(">h", 0)   
         payload += struct.pack(">b", 0)   
-
         # Throttle time (4 bytes)
         payload += struct.pack(">I", 0)
         # Final tagged fields at end (1 byte)
@@ -93,6 +90,35 @@ class ApiRequest(BaseKafka):
             return ERRORS["ok"]
         else:
             return ERRORS["error"]
+
+class FetchRequest(BaseKafka):
+    def __init__(self, version_int: int, correlation_id: bytes, request_body: bytes):
+        self.version_int = version_int
+        self.correlation_id = correlation_id
+        self.request_body = request_body # We're not parsing this yet
+        self.message = self._create_message(self.construct_response())
+
+    def construct_response(self):
+        # FetchResponse V16
+        # See: kafka-Fetch-API-Protocol-Summary.md or https://kafka.apache.org/protocol.html#The_Messages_Fetch
+        
+        payload = self.correlation_id # Correlation ID (4 bytes)
+        # Header Tagged Fields (Uvarint, 0 means no tagged fields)
+        # For FetchResponse v9+, the header can have tagged fields.
+        # We'll assume 0 tagged fields for simplicity in this stage.
+        payload += TAG_BUFFER # (1 byte)
+
+        # Response Body
+        response_body = b""
+        response_body += struct.pack(">i", 0) # ThrottleTimeMs (INT32)
+        response_body += struct.pack(">h", 0) # ErrorCode (INT16) - Top-level error code
+        response_body += struct.pack(">i", 0) # SessionID (INT32)
+        # Responses array (CompactArray of FetchableTopicResponse)
+        response_body += struct.pack(">b", 1) # Array length (0 entries + 1 for compact format)
+        # Tagged Fields at the end of the response body
+        response_body += TAG_BUFFER # (1 byte)
+        
+        return payload + response_body
 
 class TopicRequest(BaseKafka):
     # The class "constructor" - It's actually an initializer
@@ -291,6 +317,10 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
             request = ApiRequest(header.version_int, header.id)
+            message = request.message
+            writer.write(message)
+        elif header.key_int == 1: # Fetch API
+            request = FetchRequest(header.version_int, header.id, header.body)
             message = request.message
             writer.write(message)
         elif header.key_int == 75:  # DescribeTopicPartitions API
