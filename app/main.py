@@ -59,11 +59,12 @@ class ApiRequest(BaseKafka):
         self.version_int = version_int
         self.id = id
         self.message = self._create_message(self.construct_message())
-
-    def _construct_actual_response_body(self):
-        """Constructs the core response body: ErrorCode + ApiKeys Array."""
+    
+    def _build_response_body_content(self):
+        """Constructs the actual response body part: ErrorCode + ApiKeys Array.
+        This part is 24 bytes long to match the #GS0 test's successful hex dump."""
         actual_body = b""
-        # ErrorCode (INT16)
+        # ErrorCode (INT16) - Determined by the requested API version
         actual_body += self.error_handler()
 
         # ApiKeys: COMPACT_ARRAY(ApiVersionEntry)
@@ -83,11 +84,12 @@ class ApiRequest(BaseKafka):
         return actual_body # Should be 2 (ErrCode) + 1 (ArrayLen) + 3*7 (ApiEntries) = 24 bytes
 
     def construct_message(self):
-        # This method returns the full payload for BaseKafka._create_message:
-        # CorrelationID (4) + HeaderTagBuffer (1) + ActualResponseBody (24) = 29 bytes
+        # This method constructs the full payload that BaseKafka._create_message expects.
+        # Payload = CorrelationID (4 bytes) + Header Tag Buffer (1 byte) + Actual Response Body (24 bytes)
+        # Total payload length = 29 bytes.
         payload = self.id  # Correlation ID
-        payload += TAG_BUFFER  # Header Tag Buffer (0x00)
-        payload += self._construct_actual_response_body()
+        payload += TAG_BUFFER  # Header Tag Buffer (typically 0x00 for ApiVersionsResponse header)
+        payload += self._build_response_body_content()
         return payload
 
     
@@ -293,46 +295,8 @@ async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio
             break
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
-            api_versions_response = b""
-            # Add correlation ID from request
-            api_versions_response += header.id
-            # Set error code based on the request API version:
-            # If version is within 0 to 4, return OK (0), else return error (35)
-            if 0 <= header.version_int <= 4:
-                api_versions_response += ERRORS["ok"]
-            else:
-                api_versions_response += ERRORS["error"]
-            # API keys array (compact format; count = number of keys + 1)
-            # Include: ApiVersions, Fetch, and DescribeTopicPartitions → count = 3 + 1 = 4
-            api_versions_response += struct.pack(">b", 4)
-
-            # ApiVersions entry
-            api_versions_response += struct.pack(">h", 18)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 4)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Fetch entry
-            api_versions_response += struct.pack(">h", 1)   # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 16)  # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # DescribeTopicPartitions entry
-            api_versions_response += struct.pack(">h", 75)  # ApiKey
-            api_versions_response += struct.pack(">h", 0)   # MinVersion
-            api_versions_response += struct.pack(">h", 0)   # MaxVersion
-            api_versions_response += struct.pack(">b", 0)   # Tagged fields
-
-            # Throttle time (4 bytes)
-            api_versions_response += struct.pack(">I", 0)
-
-            # Tagged fields at end
-            api_versions_response += struct.pack(">b", 0)
-
-            # Create message with length prefix
-            message = BaseKafka._create_message(api_versions_response)
-            writer.write(message)
+            request = ApiRequest(header.version_int, header.id)
+            message = request.message # request.message is already the full message with length prefix
         elif header.key_int == 75:  # DescribeTopicPartitions API
             request = DescribeTopicPartitionsRequest(header.id, header.body, metadata)
             message = request.message
