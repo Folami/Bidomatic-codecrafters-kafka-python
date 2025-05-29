@@ -95,152 +95,56 @@ class FetchRequest(BaseKafka):
     def __init__(self, version_int: int, correlation_id: bytes, request_body: bytes):
         self.version_int = version_int
         self.correlation_id = correlation_id
-        self.request_body = request_body # We're not parsing this yet
-        self.parsed_topic_id = b'\x00' * 16 # Default to a zero UUID if parsing fails or no topics
-        self.parsed_partition_index = 0 # Default partition index
-        self._parse_fetch_request()
+        self.request_body = request_body
+        self.topic_id = None  # Initialize topic_id
+        self.parse_request_body()  # Parse the request body to extract topic_id
         self.message = self._create_message(self.construct_response())
 
-    def _parse_fetch_request(self):
-        # Simplified parsing for Fetch Request v12+ (flexible versions)
-        # We are interested in the first topic's ID and its first partition's index.
-        # Fetch Request:
-        # ... other fields ...
-        # Topics (COMPACT_ARRAY)
-        #   TopicId (UUID)
-        #   Partitions (COMPACT_ARRAY)
-        #     Partition (INT32)
-        #     CurrentLeaderEpoch (INT32)
-        #     FetchOffset (INT64)
-        #     LogStartOffset (INT64)
-        #     PartitionMaxBytes (INT32)
-        #     TAG_BUFFER
-        #   TAG_BUFFER
-        # ...
-        
-        buffer = self.request_body
-        # Skip ReplicaId (INT32), MaxWaitMs (INT32), MinBytes (INT32), MaxBytes (INT32)
-        # For v16, these are present.
-        # For flexible versions (v12+), there might be tagged fields before topics.
-        # We'll make a simplifying assumption for this stage that we can find the topics array.
-        # A more robust parser would handle tagged fields and version differences.
-
-        # Assuming we've skipped to the topics array (this is a simplification)
-        # Let's find the first Uvarint for the array length.
-        # A robust parser would read Uvarint properly. For now, assume it's 1 byte if small.
-        # Skip fields until we find the topics array. For v16, after ClusterId (nullable string), ReplicaEpoch (int32), RackId (string)
-        # This is highly simplified and will need to be made robust later.
-        # For this stage, let's assume the first topic ID starts at a known offset for the test case.
-        # A common pattern for the first topic ID in a v12+ request:
-        # ReplicaId (4), MaxWait (4), MinBytes (4), MaxBytes (4), IsolationLevel (1), SessionId (4), SessionEpoch (4) = 25 bytes
-        # Topics Array Length (Uvarint, assume 1 byte for 1 topic = 0x02)
-        # TopicId (16 bytes)
-        # Partitions Array Length (Uvarint, assume 1 byte for 1 partition = 0x02)
-        # PartitionIndex (INT32)
-
-        # This is a placeholder for robust parsing. For this stage, we'll assume the test sends
-        # a structure where we can directly pick out the topic ID and partition index
-        # for the *first* topic and *first* partition.
-
-        # A more correct parsing would involve checking request_version and iterating through fields.
-        # For now, let's assume the test sends a single topic, and we can extract its ID.
-        # The structure of FetchRequest v16:
-        # Header
-        # ReplicaId (INT32) - for followers, -1 for consumers
-        # MaxWaitTime (INT32)
-        # MinBytes (INT32)
-        # MaxBytes (INT32)
-        # IsolationLevel (INT8)
-        # SessionId (INT32)
-        # SessionEpoch (INT32)
-        # Topics (COMPACT_ARRAY of FetchTopic)
-        #   TopicId (UUID)
-        #   Partitions (COMPACT_ARRAY of FetchPartition)
-        #     Partition (INT32)
-        #     CurrentLeaderEpoch (INT32)
-        #     FetchOffset (INT64)
-        #     LogStartOffset (INT64)
-        #     PartitionMaxBytes (INT32)
-        #     TAG_BUFFER
-        #   TAG_BUFFER
-        # ForgottenTopicsData (COMPACT_ARRAY of ForgottenTopic)
-        # RackId (COMPACT_STRING)
-        # TAG_BUFFER
-
-        try:
-            offset = 0
-            # Skip ReplicaId, MaxWait, MinBytes, MaxBytes, IsolationLevel, SessionId, SessionEpoch
-            offset += 4 + 4 + 4 + 4 + 1 + 4 + 4 # 25 bytes
-
-            # Topics Array Length (CompactArray Uvarint)
-            # Assuming it's 1 topic, so length is 2 (1 entry + 1)
-            topics_array_len_byte = self.request_body[offset]
-            offset += 1
-            num_topics = topics_array_len_byte -1
-
-            if num_topics > 0:
-                # First TopicId (UUID - 16 bytes)
-                self.parsed_topic_id = self.request_body[offset : offset + 16]
-                offset += 16
-
-                # Partitions Array Length for the first topic (CompactArray Uvarint)
-                # Assuming 1 partition, so length is 2 (1 entry + 1)
-                partitions_array_len_byte = self.request_body[offset]
-                offset += 1
-                num_partitions = partitions_array_len_byte - 1
-
-                if num_partitions > 0:
-                    # First Partition Index (INT32)
-                    self.parsed_partition_index = int.from_bytes(self.request_body[offset : offset + 4], byteorder="big")
-                    # offset += 4 # Not needed further for this stage
-        except IndexError:
-            print("Error parsing FetchRequest: not enough data for expected fields.", file=sys.stderr)
-            # Keep default parsed_topic_id (zero UUID) and parsed_partition_index (0)
-        except Exception as e:
-            print(f"Unexpected error during FetchRequest parsing: {e}", file=sys.stderr)
+    def parse_request_body(self):
+        # Skip the first 8 bytes (replica_id and max_wait_time)
+        buffer = self.request_body[8:]
+        # Skip the next 4 bytes (min_bytes)
+        buffer = buffer[4:]
+        # Parse the topics array (CompactArray of FetchableTopic)
+        array_length = buffer[0] - 1  # Compact array length
+        buffer = buffer[1:]
+        if array_length > 0:
+            # Extract the topic_id (UUID, 16 bytes)
+            self.topic_id = buffer[:16]
+            buffer = buffer[16:]
+            # Skip the partitions array (we don't need it for this stage)
+            buffer = buffer[1:]  # Compact array length
+        else:
+            self.topic_id = None
 
     def construct_response(self):
-        # FetchResponse V16
-        # See: kafka-Fetch-API-Protocol-Summary.md or https://kafka.apache.org/protocol.html#The_Messages_Fetch
-        
-        payload = self.correlation_id # Correlation ID (4 bytes)
-        # Header Tagged Fields (Uvarint, 0 means no tagged fields)
-        # For FetchResponse v9+, the header can have tagged fields.
-        # We'll assume 0 tagged fields for simplicity in this stage.
-        payload += TAG_BUFFER # (1 byte)
+        payload = self.correlation_id  # Correlation ID (4 bytes)
+        payload += TAG_BUFFER  # Header Tagged Fields (1 byte, 0 means no tagged fields)
 
         # Response Body
         response_body = b""
-        response_body += struct.pack(">i", 0) # ThrottleTimeMs (INT32)
-        response_body += struct.pack(">h", 0) # ErrorCode (INT16) - Top-level error code
-        response_body += struct.pack(">i", 0) # SessionID (INT32)
-        # Responses array (CompactArray of FetchableTopicResponse)
-        # For this stage, if a topic was requested (even if unknown), we respond for it.
-        # The test sends 1 topic.
-        response_body += struct.pack(">b", 2) # Array length (1 entry + 1 for compact format)
+        response_body += struct.pack(">i", 0)  # ThrottleTimeMs (INT32)
+        response_body += struct.pack(">h", 0)  # ErrorCode (INT16) - Top-level error code
+        response_body += struct.pack(">i", 0)  # SessionID (INT32)
 
+        # Responses array (CompactArray of FetchableTopicResponse)
+        response_body += struct.pack(">b", 2)  # Array length (1 entry + 1 for compact format)
         # FetchableTopicResponse
-        response_body += self.parsed_topic_id # TopicID (UUID - 16 bytes)
-        # Partitions array (CompactArray of FetchPartitionResponse)
-        response_body += struct.pack(">b", 2) # Array length (1 partition entry + 1)
-        
-        # FetchPartitionResponse
-        response_body += struct.pack(">i", self.parsed_partition_index) # Partition Index (INT32)
-        response_body += struct.pack(">h", 100) # ErrorCode (INT16) - UNKNOWN_TOPIC_ID (or UNKNOWN_TOPIC_OR_PARTITION if more general)
-                                               # Kafka uses 3 for UNKNOWN_TOPIC_OR_PARTITION.
-                                               # The test specifically asks for 100 (UNKNOWN_TOPIC_ID).
-        response_body += struct.pack(">q", -1)  # HighWatermark (INT64)
-        response_body += struct.pack(">q", -1)  # LastStableOffset (INT64)
-        response_body += struct.pack(">q", -1)  # LogStartOffset (INT64)
-        response_body += struct.pack(">b", 1)   # AbortedTransactions (CompactArray - empty, so length 1 (0+1))
-        response_body += struct.pack(">i", -1)  # PreferredReadReplica (INT32)
-        response_body += struct.pack(">b", 1)   # RecordSet (CompactBytes - empty, so length 1 (0+1))
-        response_body += TAG_BUFFER # Tagged Fields for FetchPartitionResponse
-        response_body += TAG_BUFFER # Tagged Fields for FetchableTopicResponse
+        response_body += self.topic_id  # Topic ID (UUID, 16 bytes)
+        # Partitions array (CompactArray of PartitionData)
+        response_body += struct.pack(">b", 2)  # Array length (1 entry + 1 for compact format)
+        # PartitionData
+        response_body += struct.pack(">i", 0)  # PartitionIndex (INT32)
+        response_body += struct.pack(">h", 100)  # ErrorCode (INT16) - UNKNOWN_TOPIC
+        # Tagged Fields at the end of PartitionData
+        response_body += TAG_BUFFER  # (1 byte)
+
+        # Tagged Fields at the end of FetchableTopicResponse
+        response_body += TAG_BUFFER  # (1 byte)
 
         # Tagged Fields at the end of the response body
-        response_body += TAG_BUFFER # (1 byte)
-        
+        response_body += TAG_BUFFER  # (1 byte)
+
         return payload + response_body
 
 class TopicRequest(BaseKafka):
