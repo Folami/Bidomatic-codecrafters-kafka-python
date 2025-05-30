@@ -96,8 +96,8 @@ class FetchRequest(BaseKafka):
         self.version_int = version_int
         self.correlation_id = correlation_id
         self.request_body = request_body
-        self.parsed_topic_id = b'\x00' * 16 # Default to a zero UUID
-        self.parsed_partition_index = 0
+        self.parsed_topic_id = None  # Initialize topic_id
+        self.parsed_partition_index = 0  # Default partition index
         self._parse_fetch_request()
         self.message = self._create_message(self.construct_response())
 
@@ -121,7 +121,7 @@ class FetchRequest(BaseKafka):
             if num_topics > 0:
                 # Extract TopicId (UUID - 16 bytes)
                 self.parsed_topic_id = self.request_body[offset : offset + 16]
-                offset += 16 # Advance offset past the TopicId
+                offset += 16  # Advance offset past the TopicId
 
                 # Parse Partitions Array
                 partitions_array_len_byte = self.request_body[offset]
@@ -131,7 +131,7 @@ class FetchRequest(BaseKafka):
                 if num_partitions > 0:
                     # Extract first Partition Index (INT32)
                     self.parsed_partition_index = int.from_bytes(
-                        self.request_body[offset:offset + 4],
+                        self.request_body[offset : offset + 4],
                         byteorder="big"
                     )
 
@@ -151,7 +151,7 @@ class FetchRequest(BaseKafka):
         response_body += struct.pack(">b", 2)  # Array length (1 entry + 1)
 
         # TopicResponse
-        response_body += self.parsed_topic_id  # Use the parsed topic ID directly
+        response_body += self.parsed_topic_id if self.parsed_topic_id else b'\x00' * 16  # Use the parsed topic ID
         response_body += struct.pack(">b", 2)  # Partitions array length
 
         # PartitionResponse
