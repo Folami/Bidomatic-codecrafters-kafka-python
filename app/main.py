@@ -102,50 +102,7 @@ class FetchRequest(BaseKafka):
         self.message = self._create_message(self.construct_response())
 
     def _parse_fetch_request(self):
-        # Simplified parsing for Fetch Request v12+ (flexible versions)
-        # We are interested in the first topic's ID and its first partition's index.
-        # Fetch Request:
-        # ... other fields ...
-        # Topics (COMPACT_ARRAY)
-        #   TopicId (UUID)
-        #   Partitions (COMPACT_ARRAY)
-        #     Partition (INT32)
-        #     CurrentLeaderEpoch (INT32)
-        #     FetchOffset (INT64)
-        #     LogStartOffset (INT64)
-        #     PartitionMaxBytes (INT32)
-        #     TAG_BUFFER
-        #   TAG_BUFFER
-        # ...
-        
-        buffer = self.request_body
-        # Skip ReplicaId (INT32), MaxWaitMs (INT32), MinBytes (INT32), MaxBytes (INT32)
-        # For v16, these are present.
-        # For flexible versions (v12+), there might be tagged fields before topics.
-        # We'll make a simplifying assumption for this stage that we can find the topics array.
-        # A more robust parser would handle tagged fields and version differences.
-
-        # Assuming we've skipped to the topics array (this is a simplification)
-        # Let's find the first Uvarint for the array length.
-        # A robust parser would read Uvarint properly. For now, assume it's 1 byte if small.
-        # Skip fields until we find the topics array. For v16, after ClusterId (nullable string), ReplicaEpoch (int32), RackId (string)
-        # This is highly simplified and will need to be made robust later.
-        # For this stage, let's assume the first topic ID starts at a known offset for the test case.
-        # A common pattern for the first topic ID in a v12+ request:
-        # ReplicaId (4), MaxWait (4), MinBytes (4), MaxBytes (4), IsolationLevel (1), SessionId (4), SessionEpoch (4) = 25 bytes
-        # Topics Array Length (Uvarint, assume 1 byte for 1 topic = 0x02)
-        # TopicId (16 bytes)
-        # Partitions Array Length (Uvarint, assume 1 byte for 1 partition = 0x02)
-        # PartitionIndex (INT32)
-
-        # This is a placeholder for robust parsing. For this stage, we'll assume the test sends
-        # a structure where we can directly pick out the topic ID and partition index
-        # for the *first* topic and *first* partition.
-
-        # A more correct parsing would involve checking request_version and iterating through fields.
-        # For now, let's assume the test sends a single topic, and we can extract its ID.
         # The structure of FetchRequest v16:
-        # Header
         # ReplicaId (INT32) - for followers, -1 for consumers
         # MaxWaitTime (INT32)
         # MinBytes (INT32)
@@ -153,16 +110,18 @@ class FetchRequest(BaseKafka):
         # IsolationLevel (INT8)
         # SessionId (INT32)
         # SessionEpoch (INT32)
-        # Topics (COMPACT_ARRAY of FetchTopic)
-        #   TopicId (UUID)
-        #   Partitions (COMPACT_ARRAY of FetchPartition)
-        #     Partition (INT32)
-        #     CurrentLeaderEpoch (INT32)
-        #     FetchOffset (INT64)
-        #     LogStartOffset (INT64)
-        #     PartitionMaxBytes (INT32)
+        # Topics (COMPACT_ARRAY of FetchTopic)  <-- This is what we need to parse
+        #   FetchTopic:
+        #     TopicId (UUID)
+        #     Partitions (COMPACT_ARRAY of FetchPartition)
+        #       FetchPartition:
+        #         Partition (INT32)
+        #         CurrentLeaderEpoch (INT32)
+        #         FetchOffset (INT64)
+        #         LogStartOffset (INT64)
+        #         PartitionMaxBytes (INT32)
+        #         TAG_BUFFER
         #     TAG_BUFFER
-        #   TAG_BUFFER
         # ForgottenTopicsData (COMPACT_ARRAY of ForgottenTopic)
         # RackId (COMPACT_STRING)
         # TAG_BUFFER
@@ -170,25 +129,38 @@ class FetchRequest(BaseKafka):
         try:
             offset = 0
             # Skip ReplicaId, MaxWait, MinBytes, MaxBytes, IsolationLevel, SessionId, SessionEpoch
-            offset += 4 + 4 + 4 + 4 + 1 + 4 + 4 # 25 bytes
+            # ReplicaId (INT32)
+            offset += 4
+            # MaxWaitTime (INT32)
+            offset += 4
+            # MinBytes (INT32)
+            offset += 4
+            # MaxBytes (INT32)
+            offset += 4
+            # IsolationLevel (INT8)
+            offset += 1
+            # SessionId (INT32)
+            offset += 4
+            # SessionEpoch (INT32)
+            offset += 4 # Total skipped so far: 25 bytes
 
             # Topics Array Length (CompactArray Uvarint)
-            # Assuming it's 1 topic, so length is 2 (1 entry + 1)
+            # For a compact array, the first byte is num_elements + 1.
+            # We assume for this stage the number of topics is small enough that
+            # the Uvarint for array length is a single byte.
             topics_array_len_byte = self.request_body[offset]
             offset += 1
-            num_topics = topics_array_len_byte -1
+            num_topics = topics_array_len_byte - 1 # Actual number of topic entries
 
             if num_topics > 0:
                 # First TopicId (UUID - 16 bytes)
                 self.parsed_topic_id = self.request_body[offset : offset + 16]
                 offset += 16
 
-                # Partitions Array Length for the first topic (CompactArray Uvarint)
-                # Assuming 1 partition, so length is 2 (1 entry + 1)
+                # Partitions Array for the first topic
                 partitions_array_len_byte = self.request_body[offset]
                 offset += 1
                 num_partitions = partitions_array_len_byte - 1
-
                 if num_partitions > 0:
                     # First Partition Index (INT32)
                     self.parsed_partition_index = int.from_bytes(self.request_body[offset : offset + 4], byteorder="big")
