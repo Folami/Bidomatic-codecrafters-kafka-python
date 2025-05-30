@@ -350,9 +350,13 @@ class DescribeTopicPartitionsRequest(BaseKafka):
 
 async def client_handler(metadata, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     while True:
-        data = await reader.read(1024)
+        # Read the 4-byte message length first
+        data = await reader.readexactly(4)
         if not data:
             break
+        message_length = int.from_bytes(data, byteorder="big")
+        # Now read the rest of the message
+        data += await reader.readexactly(message_length)
         header = KafkaHeader(data)
         if header.key_int == 18:  # ApiVersions
             request = ApiRequest(header.version_int, header.id)
