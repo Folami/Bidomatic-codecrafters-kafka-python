@@ -129,40 +129,46 @@ class FetchRequest(BaseKafka):
         try:
             offset = 0
             # Skip ReplicaId, MaxWait, MinBytes, MaxBytes, IsolationLevel, SessionId, SessionEpoch
-            # ReplicaId (INT32)
-            offset += 4
-            # MaxWaitTime (INT32)
-            offset += 4
-            # MinBytes (INT32)
-            offset += 4
-            # MaxBytes (INT32)
-            offset += 4
-            # IsolationLevel (INT8)
-            offset += 1
-            # SessionId (INT32)
-            offset += 4
-            # SessionEpoch (INT32)
-            offset += 4 # Total skipped so far: 25 bytes
+            offset += 4  # ReplicaId (INT32)
+            offset += 4  # MaxWaitTime (INT32)
+            offset += 4  # MinBytes (INT32)
+            offset += 4  # MaxBytes (INT32)
+            offset += 1  # IsolationLevel (INT8)
+            offset += 4  # SessionId (INT32)
+            offset += 4  # SessionEpoch (INT32)
+            # Total skipped so far: 25 bytes
 
             # Topics Array Length (CompactArray Uvarint)
             # For a compact array, the first byte is num_elements + 1.
             # We assume for this stage the number of topics is small enough that
             # the Uvarint for array length is a single byte.
+            if offset >= len(self.request_body):
+                print("Error parsing FetchRequest: not enough data for Topics array length.", file=sys.stderr)
+                return
             topics_array_len_byte = self.request_body[offset]
             offset += 1
-            num_topics = topics_array_len_byte - 1 # Actual number of topic entries
+            num_topics = topics_array_len_byte - 1  # Actual number of topic entries
 
             if num_topics > 0:
                 # First TopicId (UUID - 16 bytes)
+                if offset + 16 > len(self.request_body):
+                    print("Error parsing FetchRequest: not enough data for TopicId.", file=sys.stderr)
+                    return
                 self.parsed_topic_id = self.request_body[offset : offset + 16]
                 offset += 16
 
                 # Partitions Array for the first topic
+                if offset >= len(self.request_body):
+                    print("Error parsing FetchRequest: not enough data for Partitions array length.", file=sys.stderr)
+                    return
                 partitions_array_len_byte = self.request_body[offset]
                 offset += 1
                 num_partitions = partitions_array_len_byte - 1
                 if num_partitions > 0:
                     # First Partition Index (INT32)
+                    if offset + 4 > len(self.request_body):
+                        print("Error parsing FetchRequest: not enough data for Partition Index.", file=sys.stderr)
+                        return
                     self.parsed_partition_index = int.from_bytes(self.request_body[offset : offset + 4], byteorder="big")
                     # offset += 4 # Not needed further for this stage
         except IndexError:
