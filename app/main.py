@@ -120,9 +120,8 @@ class FetchRequest(BaseKafka):
 
             if num_topics > 0:
                 # Extract TopicId (UUID - 16 bytes)
-                topic_id_start = offset + 16  # Skip bytes before topic ID
-                self.parsed_topic_id = self.request_body[topic_id_start - 16:topic_id_start]
-                offset = topic_id_start
+                self.parsed_topic_id = self.request_body[offset : offset + 16]
+                offset += 16 # Advance offset past the TopicId
 
                 # Parse Partitions Array
                 partitions_array_len_byte = self.request_body[offset]
