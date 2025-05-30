@@ -96,7 +96,7 @@ class FetchRequest(BaseKafka):
         self.version_int = version_int
         self.correlation_id = correlation_id
         self.request_body = request_body
-        self.parsed_topic_id = None
+        self.parsed_topic_id = b'\x00' * 16 # Default to a zero UUID
         self.parsed_partition_index = 0
         self._parse_fetch_request()
         self.message = self._create_message(self.construct_response())
