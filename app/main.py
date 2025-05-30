@@ -96,82 +96,77 @@ class FetchRequest(BaseKafka):
         self.version_int = version_int
         self.correlation_id = correlation_id
         self.request_body = request_body
-        self.parsed_topic_id = None  # Initialize topic_id
-        self.parsed_partition_index = 0  # Default partition index
+        self.parsed_topic_id = None
+        self.parsed_partition_index = 0
         self._parse_fetch_request()
         self.message = self._create_message(self.construct_response())
 
     def _parse_fetch_request(self):
         try:
-            offset = 0
-            # Skip ReplicaId, MaxWait, MinBytes, MaxBytes, IsolationLevel, SessionId, SessionEpoch
-            offset += 25  # Total skipped bytes
+            # Skip initial fields:
+            # - ReplicaId (4 bytes)
+            # - MaxWait (4 bytes)
+            # - MinBytes (4 bytes)
+            # - MaxBytes (4 bytes)
+            # - IsolationLevel (1 byte)
+            # - SessionId (4 bytes)
+            # - SessionEpoch (4 bytes)
+            offset = 25
 
-            # Topics Array Length (CompactArray Uvarint)
-            if offset >= len(self.request_body):
-                print("Error parsing FetchRequest: not enough data for Topics array length.", file=sys.stderr)
-                return
+            # Topics Array Length (CompactArray)
             topics_array_len_byte = self.request_body[offset]
             offset += 1
-            num_topics = topics_array_len_byte - 1  # Actual number of topic entries
+            num_topics = topics_array_len_byte - 1  # Compact format length
 
             if num_topics > 0:
-                # First TopicId (UUID - 16 bytes)
-                if offset + 16 > len(self.request_body):
-                    print("Error parsing FetchRequest: not enough data for TopicId.", file=sys.stderr)
-                    return
-                self.parsed_topic_id = self.request_body[offset : offset + 16]
-                offset += 16
+                # Extract TopicId (UUID - 16 bytes)
+                topic_id_start = offset + 16  # Skip bytes before topic ID
+                self.parsed_topic_id = self.request_body[topic_id_start - 16:topic_id_start]
+                offset = topic_id_start
 
-                # Partitions Array for the first topic
-                if offset >= len(self.request_body):
-                    print("Error parsing FetchRequest: not enough data for Partitions array length.", file=sys.stderr)
-                    return
+                # Parse Partitions Array
                 partitions_array_len_byte = self.request_body[offset]
                 offset += 1
                 num_partitions = partitions_array_len_byte - 1
+
                 if num_partitions > 0:
-                    # First Partition Index (INT32)
-                    if offset + 4 > len(self.request_body):
-                        print("Error parsing FetchRequest: not enough data for Partition Index.", file=sys.stderr)
-                        return
-                    self.parsed_partition_index = int.from_bytes(self.request_body[offset : offset + 4], byteorder="big")
-        except IndexError:
-            print("Error parsing FetchRequest: not enough data for expected fields.", file=sys.stderr)
+                    # Extract first Partition Index (INT32)
+                    self.parsed_partition_index = int.from_bytes(
+                        self.request_body[offset:offset + 4],
+                        byteorder="big"
+                    )
+
         except Exception as e:
-            print(f"Unexpected error during FetchRequest parsing: {e}", file=sys.stderr)
+            print(f"Error parsing FetchRequest: {e}", file=sys.stderr)
 
     def construct_response(self):
-        payload = self.correlation_id  # Correlation ID (4 bytes)
-        payload += TAG_BUFFER  # Header Tagged Fields (1 byte, 0 means no tagged fields)
+        payload = self.correlation_id
+        payload += TAG_BUFFER  # Header Tagged Fields
 
-        # Response Body
         response_body = b""
-        response_body += struct.pack(">i", 0)  # ThrottleTimeMs (INT32)
-        response_body += struct.pack(">h", 0)  # ErrorCode (INT16) - Top-level error code
-        response_body += struct.pack(">i", 0)  # SessionID (INT32)
+        response_body += struct.pack(">i", 0)  # ThrottleTimeMs
+        response_body += struct.pack(">h", 0)  # ErrorCode
+        response_body += struct.pack(">i", 0)  # SessionID
 
-        # Responses array (CompactArray of FetchableTopicResponse)
-        response_body += struct.pack(">b", 2)  # Array length (1 entry + 1 for compact format)
+        # Responses array (CompactArray)
+        response_body += struct.pack(">b", 2)  # Array length (1 entry + 1)
 
-        # FetchableTopicResponse
-        response_body += self.parsed_topic_id if self.parsed_topic_id else b'\x00' * 16  # TopicID (UUID - 16 bytes)
-        response_body += struct.pack(">b", 2)  # Partitions array length (1 entry + 1)
+        # TopicResponse
+        response_body += self.parsed_topic_id  # Use the parsed topic ID directly
+        response_body += struct.pack(">b", 2)  # Partitions array length
 
-        # FetchPartitionResponse
-        response_body += struct.pack(">i", self.parsed_partition_index)  # Partition Index (INT32)
-        response_body += struct.pack(">h", 100)  # ErrorCode (INT16) - UNKNOWN_TOPIC
-        response_body += struct.pack(">q", -1)  # HighWatermark (INT64)
-        response_body += struct.pack(">q", -1)  # LastStableOffset (INT64)
-        response_body += struct.pack(">q", -1)  # LogStartOffset (INT64)
-        response_body += struct.pack(">b", 1)  # AbortedTransactions (CompactArray - empty, so length 1)
-        response_body += struct.pack(">i", -1)  # PreferredReadReplica (INT32)
-        response_body += struct.pack(">b", 1)  # RecordSet (CompactBytes - empty, so length 1)
-        response_body += TAG_BUFFER  # Tagged Fields for FetchPartitionResponse
-        response_body += TAG_BUFFER  # Tagged Fields for FetchableTopicResponse
-
-        # Tagged Fields at the end of the response body
-        response_body += TAG_BUFFER  # (1 byte)
+        # PartitionResponse
+        response_body += struct.pack(">i", self.parsed_partition_index)
+        response_body += struct.pack(">h", 100)  # UNKNOWN_TOPIC error code
+        response_body += struct.pack(">q", -1)  # HighWatermark
+        response_body += struct.pack(">q", -1)  # LastStableOffset
+        response_body += struct.pack(">q", -1)  # LogStartOffset
+        response_body += struct.pack(">b", 1)  # AbortedTransactions
+        response_body += struct.pack(">i", -1)  # PreferredReadReplica
+        response_body += struct.pack(">b", 1)  # RecordSet
+        response_body += TAG_BUFFER  # Tagged Fields for PartitionResponse
+        response_body += TAG_BUFFER  # Tagged Fields for TopicResponse
+        response_body += TAG_BUFFER  # Tagged Fields for response
 
         return payload + response_body
 
