@@ -129,6 +129,7 @@ class FetchRequest(BaseKafka):
         try:
             offset = 0
             # Skip ReplicaId, MaxWait, MinBytes, MaxBytes, IsolationLevel, SessionId, SessionEpoch
+            offset += 4 # Total skipped so far: 25 bytes
             offset += 4  # ReplicaId (INT32)
             offset += 4  # MaxWaitTime (INT32)
             offset += 4  # MinBytes (INT32)
