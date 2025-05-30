@@ -103,15 +103,7 @@ class FetchRequest(BaseKafka):
 
     def _parse_fetch_request(self):
         try:
-            # Skip initial fields:
-            # - ReplicaId (4 bytes)
-            # - MaxWait (4 bytes)
-            # - MinBytes (4 bytes)
-            # - MaxBytes (4 bytes)
-            # - IsolationLevel (1 byte)
-            # - SessionId (4 bytes)
-            # - SessionEpoch (4 bytes)
-            offset = 25
+            offset = 25  # Skip header fields
 
             # Topics Array Length (CompactArray)
             topics_array_len_byte = self.request_body[offset]
@@ -119,22 +111,20 @@ class FetchRequest(BaseKafka):
             num_topics = topics_array_len_byte - 1  # Compact format length
 
             if num_topics > 0:
-                # Extract TopicId (UUID - 16 bytes)
+                # Always extract TopicId (UUID - 16 bytes)
                 self.parsed_topic_id = self.request_body[offset : offset + 16]
-                offset += 16  # Advance offset past the TopicId
+                offset += 16
 
-                # Parse Partitions Array
+                # Parse Partitions Array (skip, but extract partition index if present)
                 partitions_array_len_byte = self.request_body[offset]
                 offset += 1
                 num_partitions = partitions_array_len_byte - 1
 
                 if num_partitions > 0:
-                    # Extract first Partition Index (INT32)
                     self.parsed_partition_index = int.from_bytes(
                         self.request_body[offset : offset + 4],
                         byteorder="big"
                     )
-
         except Exception as e:
             print(f"Error parsing FetchRequest: {e}", file=sys.stderr)
 
